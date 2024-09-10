@@ -1,9 +1,3 @@
-# -*- coding: utf-8 -*-'
-"""
-Created on Mon May 13 17:13:29 2024
-
-@author: S541998
-"""
 
 import numpy as np
 import scipy.stats as spss
