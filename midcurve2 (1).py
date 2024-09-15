@@ -214,7 +214,10 @@ def BlackBasketOptionIterative2(f0, k, alpha1, alpha2, sigma1, sigma2, expiry, t
 
 
 def BlackBasketPayoffMC(f0,k, alpha1, alpha2, sigma1,sigma2, expiry, n_sample= 1000000, seed=42, mc_error=False):
-    eps1, eps2 = spss.norm.rvs(loc=0, scale=1, size=(2,n_sample), random_state = seed)
+    eps1 = spss.norm.rvs(loc=0, scale=1, size=(4, n_sample), random_state=seed)
+    eps2 = spss.norm.rvs(loc=0, scale=1, size=(4, n_sample), random_state=seed)
+    
+    print(eps1)
     
     drift1 = -0.5*sigma1*sigma1*T0
     drift2 = -0.5*sigma2*sigma2*T0
