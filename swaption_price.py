@@ -12,29 +12,22 @@ import math
 
 'prima scrivo il pricing di una swaption con 4 elementi nel basket sotto la simulazione del montecarlo (quindi 8 componenti)'
 
-def BlackBasketPayoffMC(f0, k, alpha, sigma, expiry, n_sample=1000000, seed=42, mc_error=False):
-    # Simulazione delle variabili casuali per i quattro componenti di ciascun basket
-    eps = spss.norm.rvs(loc=0, scale=1, size=(4, n_sample), random_state=seed)
+def BlackBasketPayoffMC(f0, k, alpha, sigma, T0, n_sample=1000000, seed=42, mc_error=False):
+    # Generazione di 4 variabili casuali eps
+    eps = [spss.norm.rvs(loc=0, scale=1, size=n_sample, random_state=seed+i) for i in range(4)]
     
+    # Drift e diffusione per ogni componente del basket
+    drift = [-0.5 * sigma[i] * sigma[i] * T0 for i in range(4)]
+    diff = [sigma[i] * math.sqrt(T0) * eps[i] for i in range(4)]
     
-    # Drift per i quattro componenti di ciascun basket
-    drift1 = [-0.5 * sigma1[i] * sigma1[i] * expiry for i in range(4)]
-    drift2 = [-0.5 * sigma2[i] * sigma2[i] * expiry for i in range(4)]
+    # Calcolo di ciascun "sotto-basket"
+    basket_components = [alpha[i] * (np.exp(drift[i] + diff[i]) - 1) for i in range(4)]
     
-    # Diffusione (parte stocastica) per i quattro componenti di ciascun basket
-    diff1 = [sigma1[i] * math.sqrt(expiry) * eps[i] for i in range(4)]
-    diff2 = [sigma2[i] * math.sqrt(expiry) * eps[i] for i in range(4)]
-    
-    # Calcolo del valore di ciascun componente di ogni basket
-    basket1_components = [alpha1[i] * (np.exp(drift1[i] + diff1[i]) - 1) for i in range(4)]
-    basket2_components = [alpha2[i] * (np.exp(drift2[i] + diff2[i]) - 1) for i in range(4)]
-    
-    # Somma di tutti i componenti del basket
-    basket1 = sum(basket1_components)
-    basket2 = sum(basket2_components)
+    # Somma di tutti i 4 componenti per formare il basket finale
+    basket = sum(basket_components)
     
     # Calcolo del valore del tasso alla scadenza
-    Rt = f0 + basket1 + basket2
+    Rt = f0 + basket
     
     # Payoff della swaption
     payoff_sample = np.clip(Rt - k, 0, np.inf)
@@ -48,23 +41,38 @@ def BlackBasketPayoffMC(f0, k, alpha, sigma, expiry, n_sample=1000000, seed=42, 
     
     return payoff_mean
 
-# Esempio di parametri con 4 alfa e 4 sigma per ciascun basket
-f0 = 0.02  # Tasso iniziale
-k = 0.025  # Strike
+
+f0 = -0.0019  
+k = 0.0
 
 # Quattro pesi e volatilità per ogni basket
-alpha1 = [0.5, 0.3, 0.2, 0.1]  # Pesi per il primo elemento del basket
-alpha2 = [0.4, 0.3, 0.2, 0.1]  # Pesi per il secondo elemento del basket
-sigma1 = [0.2, 0.15, 0.1, 0.05]  # Volatilità per il primo elemento del basket
-sigma2 = [0.25, 0.2, 0.15, 0.1]  # Volatilità per il secondo elemento del basket
+alpha = [0.00624, -0.00441, 0.0, 0.0]  
+sigma = [0.5132, 0.5132, 0.0, 0.0]  
 
-expiry = 1  # Tempo alla scadenza in anni
+T0 = 1  # Tempo alla scadenza in anni
 n_sample = 1000000  # Numero di simulazioni
 
-# Calcolo del prezzo con Monte Carlo
-price, error = BlackBasketPayoffMC(f0, k, alpha1, alpha2, sigma1, sigma2, expiry, n_sample=n_sample, mc_error=True)
-print(f"Prezzo stimato della swaption con 4 componenti per basket: {price:.6f}")
-print(f"Errore Monte Carlo: {error:.6f}")
+    
+q99= spss.norm.ppf(0.99)
+mc_forward_payoff, mc_stdev = BlackBasketPayoffMC(f0, k, alpha, sigma, T0 , n_sample = 1000000, mc_error = True)
+mc_payoff_ub = mc_forward_payoff + q99*mc_stdev    
+mc_payoff_lb = mc_forward_payoff - q99*mc_stdev
+
+mc_ivol_ub = ql.bachelierBlackFormulaImpliedVol(ql.Option.Call, k, f0, T0, mc_payoff_ub, discount = 1) *1e4   
+mc_ivol_lb = ql.bachelierBlackFormulaImpliedVol(ql.Option.Call, k, f0, T0, mc_payoff_lb, discount = 1) *1e4
+mc_ivol = ql.bachelierBlackFormulaImpliedVol(ql.Option.Call, k, f0, T0, mc_forward_payoff, discount = 1) *1e4 
+
+print(f"mc payoff ({T0}y{T}y @ {strike*100:.2f}%):\t\t{mc_forward_payoff*1e4:.2f}bps / [{mc_payoff_lb*1e4:.2f}, {mc_payoff_ub*1e4:.2f}]bps")
+print(f"mc ivol:\t\t\t\t{mc_ivol:.2f}bps / [{mc_ivol_lb:.2f}, {mc_ivol_ub:.2f}]bps")
+print()
+
+
+
+# # Calcolo del prezzo con Monte Carlo
+# price, error = BlackBasketPayoffMC(f0, k, alpha, sigma, expiry, n_sample=n_sample, mc_error=True)
+# print(f"Prezzo stimato della swaption: {price:.6f}")
+# print(f"Errore Monte Carlo: {error:.6f}")
+
 
 
 def _black_basket_option_price(a1, a2, g1, g2, B):
