@@ -1,82 +1,152 @@
+'pricer swaption con 4 elementi'
+
 import numpy as np
 import scipy.stats as spss
+from scipy.stats import multivariate_normal
 import scipy.optimize as spopt
 import seaborn as sns
 import QuantLib as ql
+from QuantLib import *
 import xlwings as xw
+import pandas as pd
 import matplotlib.pyplot as plt
 import math
-
-
-'prima scrivo il pricing di una swaption con n elementi nel basket sotto la simulazione del montecarlo (quindi nx2 componenti)'
-
-def BlackBasketPayoffMC(f0, strike, alpha, sigma, rho, T0, n_sample=1000000, seed=42, mc_error=False):
-    
-    n_elements = len(alpha)
-    
-    if len(sigma) != n_elements:
-        raise ValueError("alhpa and sigma array must have same length")
-        
-    if len(rho) != n_elements or any(len(rho[i]) != n_elements for i in range(n_elements)):
-        raise ValueError("Correlation matrix must be quadratic and must have same alpha and sigma's length")
-        
-    #generazione di random variables indipendenti
-    eps = np.array([spss.norm.rvs(loc=0, scale=1, size=n_sample, random_state=seed+i) for i in range(n_elements)])
-    
-    
-    #applico la Cholesky decomposition per creare eps correlati tra di loro (vedi appendice D)
-    # creo una sqare root of a matrix p dove p = AA^T
-    
-    A = np.linalg.cholesky(rho)
-    eps_corr= np.dot(A,eps)
-    
-    # Drift e diffusione per ogni componente del basket
-    drift = [-0.5 * sigma[i] * sigma[i] * T0 for i in range(n_elements)]
-    diff = [sigma[i] * math.sqrt(T0) * eps_corr[i] for i in range(n_elements)]
-    
-    basket_components = [alpha[i] * (np.exp(drift[i] + diff[i]) - 1) for i in range(n_elements)]
-    
-    # Somma di tutti i 4 componenti per formare il basket finale
-    basket = sum(basket_components)
-    
-    Rt = f0 + basket
-    
-    # Payoff della swaption
-    payoff_sample = np.clip(Rt - strike, 0, np.inf)
-    payoff_mean = payoff_sample.mean()
-    
-    if mc_error:
-        estimate_variance = payoff_sample.var(ddof=1) / n_sample
-        mc_error_value = math.sqrt(estimate_variance)
-        return payoff_mean, mc_error_value
-    
-    return payoff_mean
 
 
 f0 = -0.0019  
 strike = 0
 
 # Quattro pesi e volatilità per ogni basket
-alpha = [0.00624, -0.00441, 0.1, 0.1]  
-sigma = [0.5132, 0.5132, 0.1 , 0.1]  
+alpha = [0.00624, -0.00441, 0.00787, -0.00714]  
+sigma = [0.5132, 0.5132, 0.5246 , 0.5246]  
+new_alpha = f0 - strike - sum(alpha)
+alpha = np.append(alpha, new_alpha)
+
 
 T0 = 1  # expiry swaption
 T = 5 # tenor swap
 
 n_sample = 1000000  # Numero di simulazioni
 
-'questa matrice mi serve per applicare la correzione tra gli elementi del black basket'
-#prima correliamo con 0.5 
+# Esempio di input per gli angoli
+theta_11 = 0.01
+theta_12 = 0.01
+theta_21 = 0.01
+theta_22 = 0.00
 
-rho = [
-    [1, 0.5, 0.0, 0.0],  # Correlazione tra 1° e 2° elemento
-    [0.5, 1, 0.0, 0.0],  # Correlazione tra 2° e 1° elemento
-    [0.0, 0.0, 1, 0.0],  # Nessuna correlazione con altri
-    [0.0, 0.0, 0.0, 1] 
-]
-  
+'prima scrivo il pricing di una swaption con n elementi nel basket sotto la simulazione del montecarlo (quindi nx2 componenti)'
+
+def var_cov_matrix(sigma,theta_11,theta_12,theta_21,theta_22):
+
+    def Cross_correlation_matrix(theta_11, theta_12, theta_21, theta_22):
+    # Costruzione della matrice 
+        C_Z = np.array([
+            [np.sin(theta_11), np.cos(theta_11) * np.sin(theta_12)],
+            [np.cos(theta_11)*np.sin(theta_21), np.cos(theta_21)*np.sin(theta_22) * np.cos(theta_12) - np.sin(theta_21)*np.sin(theta_11) * np.sin(theta_12)]
+        ])
+    
+        return C_Z
+
+    def transpose_Cross_Correlation_matrix(matrix):
+        return np.transpose(matrix)
+
+
+    # Creazione della matrice C_Z e la sua trasposta
+    C_Z = Cross_correlation_matrix(theta_11, theta_12, theta_21,theta_22)
+    C_Z_T = transpose_Cross_Correlation_matrix(C_Z)
+
+    #adesso creo le matrici identità
+    identity_matrix_1 = np.eye(2)
+    identity_matrix_2 = np.eye(2)
+
+    #creo 2 matrici 2x2 con le standard dev
+    stdev_matrix_1 = identity_matrix_1 @ np.diag(sigma[:2]) 
+    stdev_matrix_2 = identity_matrix_2 @ np.diag(sigma[2:]) 
+
+    #creo la matrice a blocchi 
+
+    block_matrix_1 = np.block([
+        [stdev_matrix_1 @ stdev_matrix_1, np.zeros((2, 2))], 
+        [np.zeros((2, 2)), stdev_matrix_2 @ stdev_matrix_2]   
+    ])
+
+
+    block_matrix_2 = np.block([
+        [np.zeros((2, 2)), C_Z],    # Parte alta a dx con C_Z
+        [C_Z_T, np.zeros((2, 2))]   # Parte bassa a sx con C_Z_T
+    ])
+
+    # Sommiamo le due matrici a blocchi per ottenere la matrice di varianza-covarianza
+    var_cov_total = block_matrix_1 + block_matrix_2
+    n_elements = var_cov_total.shape[0]
+    new_row = np.zeros((1, n_elements))  # Nuova riga di zeri
+    new_col = np.zeros((n_elements + 1, 1))  # Nuova colonna di zeri
+
+    # Aggiunta della nuova riga
+    var_cov_total = np.vstack((var_cov_total, new_row))
+    # Aggiunta della nuova colonna
+    var_cov_total = np.hstack((var_cov_total, new_col))
+
+    return var_cov_total 
+
+var_cov_total = var_cov_matrix(sigma, theta_11, theta_12, theta_21, theta_22)
+
+eigenvalues = np.linalg.eigvals(var_cov_total)
+print("Autovalori:", eigenvalues)
+
+print("Matrice di cross-correlation (C_Z):")
+print(var_cov_total[:2, 2:])  # Stampa della parte C_Z
+
+print("Trasposta della matrice di cross-correlation (C_Z_T):")
+print(var_cov_total[2:, :2])  # Stampa della parte C_Z_T
+
+print("Matrice delle deviazioni standard 1:")
+print(var_cov_total[:2, :2])  # Stampa della matrice quadrata delle deviazioni standard 1
+
+print("Matrice delle deviazioni standard 2:")
+print(var_cov_total[2:, 2:])  # Stampa della matrice quadrata delle deviazioni standard 2
+
+print("Matrice di varianza-covarianza totale:")
+print(var_cov_total)
+
+
+def BlackBasketPayoffMC(f0, strike, alpha, sigma, var_cov_total, T0, n_sample=1000000, seed=42, mc_error=False):
+    
+     n_elements = len(alpha)
+        
+     #generazione di random variables indipendenti
+     mean = np.zeros(n_elements)
+     eps = spss.multivariate_normal.rvs(mean=mean, cov=var_cov_total, size=n_sample, random_state=seed)
+    
+    # Drift e diffusione per ogni componente del basket
+     drift = -0.5 * np.array(sigma) ** 2 * T0
+     diff = np.array([sigma[i] * np.sqrt(T0) * eps[:, i] for i in range(n_elements)])
+    
+     basket = np.exp(drift[:, None] + diff) - 1
+    
+     # Somma di tutti i 4 componenti per formare il basket finale
+     basket = np.sum(np.array(alpha)[:, None] * basket, axis=0)
+    
+     Rt = f0 + basket
+    
+     # Payoff della swaption
+     payoff_sample = np.clip(Rt - strike, 0, np.inf)
+     payoff_mean = payoff_sample.mean()
+    
+     if mc_error:
+         estimate_variance = payoff_sample.var(ddof=1) / n_sample
+         mc_error_value = math.sqrt(estimate_variance)
+         return payoff_mean, mc_error_value
+    
+     return payoff_mean
+
+
+
+'questa matrice mi serve per applicare la correzione tra gli elementi del black basket'
+
+
 q99= spss.norm.ppf(0.99)
-mc_forward_payoff, mc_stdev = BlackBasketPayoffMC(f0, strike, alpha, sigma, rho, T0 , n_sample = 1000000, mc_error = True)
+mc_forward_payoff, mc_stdev = BlackBasketPayoffMC(f0, strike, alpha, sigma, var_cov_total, T0 , n_sample = 1000000, mc_error = True)
 mc_payoff_ub = mc_forward_payoff + q99*mc_stdev    
 mc_payoff_lb = mc_forward_payoff - q99*mc_stdev
 
@@ -88,12 +158,12 @@ print(f"mc payoff ({T0}y{T}y @ {strike*100:.2f}%):\t\t{mc_forward_payoff*1e4:.2f
 print(f"mc ivol:\t\t\t\t{mc_ivol:.2f}bps / [{mc_ivol_lb:.2f}, {mc_ivol_ub:.2f}]bps")
 print()
 
-# plot da rivedere 
+#plot da rivedere 
 
-def plot_volatility():
+# def plot_volatility():
     
-    strikes = np.arange(-0.015, 0.015 + 0.005, 0.005)
-    black_vols = []
+#     strikes = np.arange(-0.015, 0.015 + 0.005, 0.005)
+#     black_vols = []
 
 
 #     for strike in strikes:
@@ -116,105 +186,19 @@ def plot_volatility():
 
 # prima di implementare il metodo di approssimanzione con il moltiplicatore di Lagrange, controlliamo se con la formula chiusa base senza iterazioni otteniamo lo stesso risultato del mecaaa
 
-
-def BlackBasketApprossimativePayoff(f0, strike, alpha, sigma, rho, expiry):
-    
-    n_elements = len(alpha)
-        
-    if len(sigma) != n_elements:
-        raise ValueError("alhpa and sigma array must have same length")
-            
-    if len(rho) != n_elements or any(len(rho[i]) != n_elements for i in range(n_elements)):
-        raise ValueError("Correlation matrix must be quadratic and must has same alpha and sigma's length")
-    
-           
-    stdev = [sigma[i]*math.sqrt(expiry) for i in range(n_elements)]
-    var = [stdev[i]*stdev[i] for i in range(n_elements)]
-
-    
-    numerator_B = strike - f0 + 1/2 * sum(alpha[i] * var[i] for i in range(n_elements))
-    
-    denominator_B = 0
-    for i in range(n_elements):
-        for j in range(n_elements):
-               if i == j:
-            # Termini diagonali: alpha_i^2 * sigma_i^2 * t
-                  denominator_B += alpha[i]**2 * var[i] 
-               else:
-            # Termini fuori diagonale: 2 * alpha_i * alpha_j * sigma_i * sigma_j * rho[i,j] * t
-                  denominator_B += 2 * alpha[i] * alpha[j] * sigma[i] * sigma[j] * rho[i][j] * expiry
-        
-    total_stdev = math.sqrt(denominator_B)
-    
-    B = numerator_B/total_stdev
-       
-    beta = [alpha[i]/total_stdev for i in range(n_elements)]
-        
-    gamma = []
-    for i in range(n_elements):
-        gamma_i = beta[i] * var[i]        
-        for j in range(n_elements):
-            if i != j:
-                gamma_i += beta[j] * sigma[i] * sigma[j] * rho[i][j] * expiry
-        
-        gamma.append(gamma_i)  
-
-    payoff = 0
-    for i in range(n_elements):
-        payoff += alpha[i] * spss.norm.cdf(gamma[i] - B)
-
-    payoff += (f0 - strike - sum(alpha)) * spss.norm.cdf(-B)
-     
-    return payoff
-
-analytical_forward_payoff = BlackBasketApprossimativePayoff(f0, strike, alpha, sigma, rho, T0)
-analytical_ivol = ql.bachelierBlackFormulaImpliedVol(ql.Option.Call, strike, f0, T0, analytical_forward_payoff, discount=1) * 1e4
-
-print(f"analytical payoff ({T0}y{T}y @ {strike*100:.2f}%):\t{analytical_forward_payoff*1e4:.2f}bps")
-print(f"analytical ivol:\t\t\t{analytical_ivol:.2f}bps")
-print()
-
-
-'swaption price con 4 elementi con approssimazione del black basket con lagrange'
-
-def _black_basket_option_price(f0, strike, alpha, sigma, rho, gammas, B, expiry):
+def calculate_B(strike, f0, alpha, sigma, var_cov_total, expiry):
     
     n_elements = len(alpha)
     
-    if len(sigma) != n_elements:
-        raise ValueError("alhpa and sigma array must have same length")
-        
-    if len(rho) != n_elements or any(len(rho[i]) != n_elements for i in range(n_elements)):
-        raise ValueError("Correlation matrix must be quadratic and must has same alpha and sigma's length")
-        
-    stdev = [sigma[i]*math.sqrt(expiry) for i in range(n_elements)] 
-    var = [stdev[i]*stdev[i] for i in range(n_elements)] 
-    
-    payoff = 0
-    for i in range(n_elements):
-        payoff += alpha[i]*spss.norm.cdf(gammas[i]-B)
-    payoff += f0-strike-sum(alpha)*spss.norm.cdf(-B)
-    
-    return payoff
-
-
-def calculate_B(strike, f0, alpha, sigma, rho, expiry):
-    
-    n_elements = len(alpha)
-    
+    alpha = np.array(alpha).reshape((n_elements,1)) #vettore colonna
+    alpha_T = alpha.T #vettore riga 
     
     stdev = [sigma[i]*math.sqrt(expiry) for i in range(n_elements)] 
     var = [stdev[i]*stdev[i] for i in range(n_elements)]
-    
-    numerator = (strike - f0)
-    for i in range(n_elements):
-        numerator += 0.5*(alpha[i] * var[i])
+    numerator = strike - f0 + 0.5 * sum(alpha[i] * var[i] for i in range(n_elements))
         
-    denominator_B = 0
-    for i in range(n_elements):
-        denominator_B += alpha[i]**2 * var[i]
-        for j in range(i + 1, n_elements):
-            denominator_B += 2 * alpha[i] * alpha[j] * sigma[i] * sigma[j] * rho[i][j] * expiry
+    denominator_B = np.dot(np.dot(alpha_T,var_cov_total), alpha)
+    denominator_B = denominator_B.item()
             
     total_stdev = math.sqrt(denominator_B)
      
@@ -223,48 +207,117 @@ def calculate_B(strike, f0, alpha, sigma, rho, expiry):
     return B, total_stdev
 
 
-def BlackBasketApproximatePayoffMaximized(f0, strike, alpha, sigma, rho, expiry, convergence = False):
+def calculate_Gamma(beta, var_cov_total,expiry):
+    
+    beta = np.array(beta).reshape((-1, 1))  # Vettore colonna
+    # Calcolo di gamma utilizzando la matrice di varianza-covarianza
+    gamma = np.dot(var_cov_total, beta) * expiry
+
+    return gamma.flatten()
+    
+
+def BlackBasketApprossimativePayoff(f0, strike, alpha, sigma, var_cov_total, expiry):
     
     n_elements = len(alpha)
     
-    B, total_stdev = calculate_B(strike, f0, alpha, sigma, rho, expiry)
+    #aggiungo un nuovo alpha = f0 - strike - sum(alpha) e un sigma a 0 
+  
+ 
+    #stdev = [sigma[i]*math.sqrt(expiry) for i in range(n_elements)] 
+    #var = [stdev[i]*stdev[i] for i in range(n_elements)]
+    
+    B, total_stdev = calculate_B(strike, f0, alpha, sigma, var_cov_total, expiry)
+    beta = [alpha[i] / total_stdev for i in range(n_elements)]
+    gamma = calculate_Gamma(beta, var_cov_total, expiry)
+    gamma = gamma.flatten()
+    
+    gamma_minus_B = gamma - B
+    gamma_minus_B_matrix = np.diag(gamma_minus_B)
+   
+   # Calcolare la CDF multivariata per il vettore gamma - B
+    cdf_values = multivariate_normal.cdf(gamma_minus_B_matrix, mean=np.zeros(n_elements), cov=var_cov_total)
+    payoff = np.dot(alpha, cdf_values)
+   
+    return payoff
+    
+
+analytical_forward_payoff = BlackBasketApprossimativePayoff(f0, strike, alpha, sigma, var_cov_total, T0)
+
+if isinstance(analytical_forward_payoff, np.ndarray):
+    analytical_forward_payoff = analytical_forward_payoff.item()
+    
+analytical_ivol = ql.bachelierBlackFormulaImpliedVol(ql.Option.Call, strike, f0, T0, analytical_forward_payoff, discount=1) * 1e4
+
+    
+print(f"analytical payoff ({T0}y{T}y @ {strike*100:.2f}%):\t{analytical_forward_payoff*1e4:.2f}bps")
+print(f"analytical ivol:\t\t\t{analytical_ivol:.2f}bps")
+print()
+
+
+'swaption price con 4 elementi con approssimazione del black basket con lagrange'
+
+def _black_basket_option_price(f0, strike, alpha, sigma, var_cov_total, gamma, B, expiry):
+    
+    n_elements = len(alpha)
+    
+    if len(sigma) != n_elements:
+        raise ValueError("alhpa and sigma array must have same length")
+        
+    stdev = [sigma[i]*math.sqrt(expiry) for i in range(n_elements)] 
+    var = [stdev[i]*stdev[i] for i in range(n_elements)] 
+    
+    payoff = 0
+    for i in range(n_elements):
+        payoff += alpha[i]*spss.norm.cdf(gamma[i]-B)
+    payoff += f0-strike-sum(alpha)*spss.norm.cdf(-B)
+    
+    return payoff
+
+
+def BlackBasketApproximatePayoffMaximized(f0, strike, alpha, sigma, var_cov_total, expiry, convergence = False):
+    
+    n_elements = len(alpha)
+    
+    B, total_stdev = calculate_B(strike, f0, alpha, sigma, var_cov_total, expiry)
     
     stdev = [sigma[i]*math.sqrt(expiry) for i in range(n_elements)] 
     var = [stdev[i]*stdev[i] for i in range(n_elements)]
     
     
     beta = [alpha[i]/total_stdev for i in range(n_elements)]
-            
-    gammas = []
-    for i in range(n_elements):
-        gamma_i = beta[i] * var[i]        
-        for j in range(n_elements):
-            if i != j:
-                gamma_i += beta[j] * sigma[i] * sigma[j] * rho[i][j] * expiry
-            
-        gammas.append(gamma_i) 
-
+    gamma = calculate_Gamma(beta, var_cov_total, expiry)
+    gamma = gamma.flatten()
+    B = B.item()
+    x0 = np.append(gamma,B)
+    
+    #calcolo matrice var-cov inversa
+    var_cov_inv = np.linalg.inv(var_cov_total)
     'implementazione3 con minimizzazione con moltiplicatore di Lagrange'
     'calcolo con il segno meno perchè posso fare solo la minimizzazione, di minimizzo una funzione negativa'
-    opt_price_func = lambda x: -_black_basket_option_price(f0, strike, alpha, sigma, rho, x[:n_elements], x[n_elements], expiry)
-    opt_price_constr = lambda x: sum(x[i]**2/var[i] if var[i] > 0 else 0 for i in range(n_elements)) - 1.0
+    opt_price_func = lambda x: -_black_basket_option_price(f0, strike, alpha, sigma, var_cov_total, x[:n_elements], x[n_elements], expiry)
+    opt_price_constr = lambda x:  np.dot(np.dot(x[:n_elements].T, var_cov_inv), x[:n_elements]) - 1.0
 
     minimization_constrains = ({"type": "eq", "fun": opt_price_constr}, )
     
-    opt = spopt.minimize(fun = opt_price_func, x0 = gammas + [B], method= "SLSQP", constraints= minimization_constrains)
+    opt = spopt.minimize(fun = opt_price_func, x0 = x0, method= "SLSQP", constraints= minimization_constrains)
     
     if convergence:
         print(opt)
         
-    gammas = opt.x[:n_elements]
+    gamma = opt.x[:n_elements]
     B = opt.x[n_elements]
     print(f"stdev: {stdev}")
     print(f"var: {var}")
+    print(f"Gamma ottimizzato: {gamma}")
+    print(f"B ottimizzato: {B}")
+    return _black_basket_option_price(f0, strike, alpha, sigma, var_cov_total, gamma, B, expiry)
 
-    return _black_basket_option_price(f0, strike, alpha, sigma, rho, gammas, B, expiry)
 
+maximization_forward_payoff = BlackBasketApproximatePayoffMaximized(f0, strike, alpha, sigma, var_cov_total, T0)
 
-maximization_forward_payoff = BlackBasketApproximatePayoffMaximized(f0, strike, alpha, sigma, rho, T0)
+if isinstance(maximization_forward_payoff, np.ndarray):
+    maximization_forward_payoff = maximization_forward_payoff.item()
+    
 maximization_ivol = ql.bachelierBlackFormulaImpliedVol(ql.Option.Call, strike, f0, T0, maximization_forward_payoff, discount=1) * 1e4 
 
 
@@ -283,90 +336,67 @@ def _B_root(B_candidate, a, g, m):
     fprime = 0
     
     for i in range(n_elements):
-        basket_i = a[i]*math.exp(g[i]*B_candidate-0.5*g[i]*g[i])
+        basket_i = a[i]*np.exp(g[i]*B_candidate-0.5*g[i]*g[i])
         basket += basket_i 
         f = basket + m
         fprime += basket_i * g[i]
    
     return f, fprime
 
-
-    
-def calculate_B(strike, f0, alpha, sigma, rho, expiry):
-     
-      n_elements = len(alpha)
-     
-     
-      stdev = [sigma[i]*math.sqrt(expiry) for i in range(n_elements)] 
-      var = [stdev[i]*stdev[i] for i in range(n_elements)]
-     
-      numerator = (strike - f0)
-      for i in range(n_elements):
-          numerator += 0.5*(alpha[i] * var[i])
-         
-      denominator_B = 0
-      for i in range(n_elements):
-          denominator_B += alpha[i]**2 * var[i]
-          for j in range(i + 1, n_elements):
-              denominator_B += 2 * alpha[i] * alpha[j] * sigma[i] * sigma[j] * rho[i][j] * expiry
-             
-      total_stdev = math.sqrt(denominator_B)
-      
-      B = numerator / total_stdev
-     
-      return B, total_stdev   
  
-def BlackBasketPayoffIterative(f0, k, alpha, sigma, rho, expiry, N=2, tolerance = 1e-8, convergence = False):
+def BlackBasketPayoffIterative(f0, k, alpha, sigma, var_cov_total, expiry, N=2, tolerance = 1e-8, convergence = False):
 
     n_elements = len(alpha)
 
-    B, total_stdev = calculate_B(strike, f0, alpha, sigma, rho, expiry)
+    B, total_stdev = calculate_B(strike, f0, alpha, sigma, var_cov_total, expiry)
 
-    stdev = [sigma[i]*math.sqrt(expiry) for i in range(n_elements)]     
+    stdev = [sigma[i]*np.sqrt(expiry) for i in range(n_elements)]     
     var = [stdev[i]*stdev[i] for i in range(n_elements)]
 
 
     beta = [alpha[i]/total_stdev for i in range(n_elements)]
-        
-    gammas = []
-    for i in range(n_elements):
-        gamma_i = beta[i] * var[i]        
-        for j in range(n_elements):
-            if i != j:
-                gamma_i += beta[j] * sigma[i] * sigma[j] * rho[i][j] * expiry
-        
-        gammas.append(gamma_i) 
+    gamma = calculate_Gamma(beta, var_cov_total, expiry)
+    gamma = gamma.flatten()
+
 
 
    # Inizializzazione del payoff
     p0 = -10000
-    p1 = _black_basket_option_price(f0, k, alpha, sigma, rho, gammas, B, expiry)
+    p1 = _black_basket_option_price(f0, k, alpha, sigma, var_cov_total, gamma, B, expiry)
 
    # Iterazione per il calcolo di gamma e B
     while abs(p1 - p0) > tolerance:
        p0 = p1
 
        # Trova i gamma ottimali per ogni elemento
-       w = [alpha[i] * spss.norm.pdf(gammas[i] - B) for i in range(n_elements)]
-       gamma_denom = math.sqrt(sum(w[i]**2 * var[i] for i in range(n_elements)))
+       w = np.array([alpha[i] * spss.norm.pdf(gamma[i] - B) for i in range(n_elements)])
+       w = np.array(w).reshape((-1, 1))
        
-       for i in range(n_elements):
-           gammas[i] = w[i] * var[i] / gamma_denom
+       gamma_denom = np.sqrt(np.dot(np.dot(w.T, var_cov_total), w).item())
+       gamma = np.dot(var_cov_total, w) / gamma_denom
+       gamma = gamma.flatten()
+       
+       # for i in range(n_elements):
+       #     gamma[i] = w[i] * var[i] / gamma_denom
 
        # Ottimizzazione per trovare B utilizzando la funzione _B_root generalizzata
        opt = spopt.root_scalar(f=_B_root, method="newton", x0=B, fprime=True,
-                               args=(alpha, gammas, f0 - k - sum(alpha)))
+                               args=(alpha, gamma, f0 - k - sum(alpha)))
        B = opt.root
 
        if convergence:
            print(opt)
        
-       p1 = _black_basket_option_price(f0, k, alpha, sigma, rho, gammas, B, expiry)
+       p1 = _black_basket_option_price(f0, k, alpha, sigma, var_cov_total, gamma, B, expiry)
    
     return p1
     
 
-iterative_forward_payoff = BlackBasketPayoffIterative(f0, strike, alpha, sigma, rho, T0, tolerance=1e-8)
+iterative_forward_payoff = BlackBasketPayoffIterative(f0, strike, alpha, sigma, var_cov_total, T0, tolerance=1e-8)
+
+if isinstance(iterative_forward_payoff, np.ndarray):
+    iterative_forward_payoff = iterative_forward_payoff.item()
+    
 iterative_ivol = ql.bachelierBlackFormulaImpliedVol(ql.Option.Call, strike, f0, T0, iterative_forward_payoff, discount=1) * 1e4
 
 print(f"iterative payoff ({T0}y{T}y @ {strike*100:.2f}%):\t{iterative_forward_payoff*1e4:.2f}bps")
@@ -437,7 +467,7 @@ class AnnuityApproximation:
 
         return annuities
 
-maturities = [2, 5]  
+maturities = [2+T0, 5+T0]  
 rates = [-0.003, -0.0019] 
 T0 = 1
 
