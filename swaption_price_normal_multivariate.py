@@ -206,7 +206,7 @@ def calculate_Gamma(beta, var_cov_matrix,expiry):
     return gamma.flatten()
     
 
-def BlackBasketApprossimativePayoff(f0, strike, alpha, sigma,theta, var_cov_matrix, expiry):
+def BlackBasketApprossimativePayoff(f0, strike, alpha, sigma, theta, var_cov_matrix, expiry):
     
     n_elements = len(alpha)
     
@@ -225,19 +225,6 @@ def BlackBasketObjectiveFunctionTheta(theta11, f0, strike, alpha, sigma, expiry,
     theta = [theta11, 0.0, 0.0, 0.0]
     return (BlackBasketApprossimativePayoff(f0, strike, alpha, sigma, theta, expiry) - midcurve_market_price)**2
 
-    
-def BlackBasketObjectiveFunctionSigma(sigmahat, f0, strikes, alpha, theta, expiry, european_options_market_prices):
-    errors = []
-    for k, mkt_price in zip(strikes, european_options_market_prices):
-        model_price = BlackBasketApprossimativePayoff(f0, k, alpha, sigmahat, theta, expiry)
-        error = (model_price - mkt_price) / mkt_price
-        errors.append(error)
-
-    errors = np.array(errors)
-
-    return errors @ errors
-
-    
 
 analytical_forward_payoff = BlackBasketApprossimativePayoff(f0, strike, alpha, sigma, theta, var_cov_matrix, T0)
 
@@ -250,6 +237,126 @@ analytical_ivol = ql.bachelierBlackFormulaImpliedVol(ql.Option.Call, strike, f0,
 print(f"analytical payoff ({T0}y{T}y @ {strike*100:.2f}%):\t{analytical_forward_payoff*1e4:.2f}bps")
 print(f"analytical ivol:\t\t\t{analytical_ivol:.2f}bps")
 print()
+
+
+
+class AnnuityApproximation:
+    def __init__(self, T0, maturities, rates):
+       
+        self.T0 = T0
+        self.maturities = maturities
+        self.rates = rates  
+        if len(maturities) != len(rates):
+            raise ValueError("the maturity and rates must have the same array's length")
+
+    def calculate_annuity(self):
+        annuities = []
+
+        for i in range(len(self.maturities)):
+            T_i = self.maturities[i]
+            delta_T = T_i - self.T0
+
+            # Se il tasso è una funzione, valutalo in T0, altrimenti usa il valore fisso
+            if callable(self.rates[i]):
+                R_value = self.rates[i](self.T0)
+            else:
+                R_value = self.rates[i]
+
+            annuity = delta_T - 0.5 * R_value * (delta_T ** 2)
+            annuities.append(annuity)
+
+        return annuities
+
+maturities = [2+T0, 5+T0]  
+rates = [-0.003, -0.0019] 
+T0 = 1
+
+annuity_rates = AnnuityApproximation(T0=T0, maturities=maturities, rates=rates)
+
+annuities = annuity_rates.calculate_annuity()
+
+for i, annuity in enumerate(annuities):
+    print(f"Annuity_{maturities[i]}Y: {annuity:.6f}")
+
+
+class MeasureApproximation:
+    def __init__(self, annuities, maturities, T0, rates):
+
+        self.annuities = annuities
+        self.maturities = maturities
+        self.T0 = T0
+        self.rates = rates
+        
+    def calculate_lambda(self):
+  
+        lambdas = []
+
+        for i in range(len(self.annuities)):
+            A_i_0 = self.annuities[i]
+            T_i = self.maturities[i]
+
+            for j in range(i+1, len(self.annuities)):
+                A_j_0 = self.annuities[j]
+                T_j = self.maturities[j]
+
+                # Calcolo del denominatore
+                denom = A_j_0 - A_i_0
+                if denom == 0:
+                    raise ValueError("A_j_0 and A_i_0 cannot be egual")
+
+                delta_T_squared = (T_i - self.T0)**2 - (T_j - self.T0)**2
+                lambda_i = 0.5 * (delta_T_squared / denom + (T_i - self.T0)**2 / A_i_0)
+                lambda_j = 0.5 * (delta_T_squared / denom + (T_j - self.T0)**2 / A_j_0)
+                lambdas.append((lambda_i,lambda_j))
+
+        return lambdas
+
+measure_approx = MeasureApproximation(annuities=annuities, maturities=maturities, T0=T0, rates=rates)
+
+
+lambdas = measure_approx.calculate_lambda()
+
+for i, (lambda_i,lambda_j) in enumerate(lambdas):
+    print(f"λ_i: {lambda_i:.6f}")
+    print(f"λ_j: {lambda_j:.6f}")
+
+
+'devo travere R hlat = prezzo swaption sotto misura midcurve (utilizzando lambda)'
+
+def BlackBasketApprossimativeSigmaHat(f0, strike, alpha, sigma, theta, expiry, T0, midcurve_annuity_measure):
+    
+    annuity_approx = AnnuityApproximation(T0=T0, maturities=maturities, rates=rates)
+    annuities = annuity_approx.calculate_annuity()
+    
+    # Calcola il valore di lambda (fattore di cambio misura) usando la classe MeasureApproximation
+    measure_approx = MeasureApproximation(annuities=annuities, maturities=maturities, T0=T0, rates=rates)
+    lambdas = measure_approx.calculate_lambda()
+    
+    # Usa il primo valore di lambda calcolato come fattore per adattare la misura
+    midcurve_annuity_measure = lambdas[0][0]  # Scegli il valore di lambda appropriato
+    
+    
+    adj_alhpa = [a * midcurve_annuity_measure for a in alpha]
+    adj_strike = strike * midcurve_annuity_measure 
+    adj_forward = f0 * midcurve_annuity_measure
+    
+    model_price = BlackBasketApprossimativePayoff(adj_forward, adj_strike, adj_alpha, sigma, theta, var_cov_matrix, expiry)
+
+    sigmahat = ql.bachelierBlackFormulaImpliedVol(ql.Option.Call, strike, f0, expiry, model_price, discount = 1.0)
+    print("Implied Vol SigmaHat:", sigmahat)
+    print("Payoff swaption under midcurve annuity measure:", model_price)
+
+
+def BlackBasketObjectiveFunctionSigma(sigmahat, f0, strikes, alpha, theta, expiry, european_options_market_prices):
+    errors = []
+    for k, mkt_price in zip(strikes, european_options_market_prices):
+        model_price = BlackBasketApprossimativePayoff(f0, k, alpha, sigmahat, theta, expiry)
+        error = (model_price - mkt_price) / mkt_price
+        errors.append(error)
+
+    errors = np.array(errors)
+
+    return errors @ errors
 
 
 'swaption price con 4 elementi con approssimazione del black basket con lagrange'
@@ -436,85 +543,4 @@ def GetData():
 
 
 
-class AnnuityApproximation:
-    def __init__(self, T0, maturities, rates):
-       
-        self.T0 = T0
-        self.maturities = maturities
-        self.rates = rates  
-        if len(maturities) != len(rates):
-            raise ValueError("the maturity and rates must have the same array's length")
 
-    def calculate_annuity(self):
-        annuities = []
-
-        for i in range(len(self.maturities)):
-            T_i = self.maturities[i]
-            delta_T = T_i - self.T0
-
-            # Se il tasso è una funzione, valutalo in T0, altrimenti usa il valore fisso
-            if callable(self.rates[i]):
-                R_value = self.rates[i](self.T0)
-            else:
-                R_value = self.rates[i]
-
-            annuity = delta_T - 0.5 * R_value * (delta_T ** 2)
-            annuities.append(annuity)
-
-        return annuities
-
-maturities = [2+T0, 5+T0]  
-rates = [-0.003, -0.0019] 
-T0 = 1
-
-annuity_rates = AnnuityApproximation(T0=T0, maturities=maturities, rates=rates)
-
-annuities = annuity_rates.calculate_annuity()
-
-for i, annuity in enumerate(annuities):
-    print(f"Annuity_{maturities[i]}Y: {annuity:.6f}")
-
-
-class MeasureApproximation:
-    def __init__(self, annuities, maturities, T0, rates):
-
-        self.annuities = annuities
-        self.maturities = maturities
-        self.T0 = T0
-        self.rates = rates
-        
-    def calculate_lambda(self):
-  
-        lambdas = []
-
-        for i in range(len(self.annuities)):
-            A_i_0 = self.annuities[i]
-            T_i = self.maturities[i]
-
-            for j in range(i+1, len(self.annuities)):
-                A_j_0 = self.annuities[j]
-                T_j = self.maturities[j]
-
-                # Calcolo del denominatore
-                denom = A_j_0 - A_i_0
-                if denom == 0:
-                    raise ValueError("A_j_0 and A_i_0 cannot be egual")
-
-                delta_T_squared = (T_i - self.T0)**2 - (T_j - self.T0)**2
-                lambda_i = 0.5 * (delta_T_squared / denom + (T_i - self.T0)**2 / A_i_0)
-                lambda_j = 0.5 * (delta_T_squared / denom + (T_j - self.T0)**2 / A_j_0)
-                lambdas.append((lambda_i,lambda_j))
-
-        return lambdas
-
-measure_approx = MeasureApproximation(annuities=annuities, maturities=maturities, T0=T0, rates=rates)
-
-
-lambdas = measure_approx.calculate_lambda()
-
-for i, (lambda_i,lambda_j) in enumerate(lambdas):
-    print(f"λ_i: {lambda_i:.6f}")
-    print(f"λ_j: {lambda_j:.6f}")
-
-
-'devo travere R hlat = prezzo swaption sotto misura midcurve (utilizzando lambda)'
