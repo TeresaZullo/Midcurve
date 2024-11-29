@@ -1,0 +1,133 @@
+import numpy as np
+import QuantLib as al
+import scipy.stats as spss
+from scipy.stats import multivariate_normal
+import scipy.optimize as spopt
+from scipy.optimize import minimize
+import xlwings as xw
+import pandas as pd
+
+import sys
+import os
+sys.path.append(os.getcwd())
+from swaption_price_normal_multivariate import BlackBasketApprossimativePayoff
+
+#implemento gli helpers
+
+class BlackBasketHelper:
+    def __init__(self, expiry, tenor , atm_rate , nvol, strike, f0, var_cov_matrix):
+        self.expiry = expiry
+        self.tenor = tenor
+        self.atm_rate = atm_rate
+        self.nvol = nvol
+        self.strike = strike
+        self.f0 = f0
+        self.var_cov_matrix = self.var_cov_matrix()
+        
+    def market_price(self):
+        variance = (self.nvol/100)**2*self.expiry
+        return ql.blackFormula(ql.Option.Call, self.strike, self.f0, np.sqrt(variance))
+    
+    def model_price(self, alpha, sigma, theta):
+        return BlackBasketApprossimativePayoff(
+            f0 = self.f0,
+            strike = self.strike,
+            alpha = alpha,
+            sigma = sigma,
+            theta = theta,
+            var_cov_matrix = self.var_cov_matrix,
+            expiry = self.expiry
+            
+        )
+    
+    def error(self, alpha, sigma, theta):
+        #calcolo errore come differenza tra prezzo teorico e prezzo di mercato al quadrato
+        model= self.model_price(alpha, sigma, theta)
+        market = self.market_price()
+        
+        return (model - market)** 2 
+    
+    
+def calibrate_black_basket(helpers, initial_guess, var_cov_matrix):
+    
+    def objective(params):
+        alpha= params[:len(helpers)]
+        sigma = params[len(helpers):-1]
+        theta = params[-1]
+        total_error = 0.0
+        
+        for i, helper in enumerate(helpers):
+            total_error += helper.error(alpha[i], sigma[i], theta)
+        return total_error
+        
+        
+    result = minimize(
+        objective,
+        initial_guess,
+        method='Nelder-Mead',
+        options={'maxiter': 5000, 'disp': True}
+    )
+   
+    calib_params = result.x
+    calib_alpha = calib_params[:len(helpers)]
+    calib_sigma = calib_params[len(helpers):-1]
+    calib_theta = calib_params[-1]
+   
+    return {
+       'alpha' : calib_alpha,
+       'sigma' : calib_sigma,
+       'theta' : calib_theta,
+       'error_average' : result.fun / len(helpers)
+    }
+
+def main_calibration():
+    
+    file_path = r'C:\Users\T004697\Desktop\TESI\DATI _TESI.xlsx' 
+    wb = xw.Book(file_path)
+    sheet = wb.sheets['vol']  # Sostituisci con il nome del foglio
+
+    data = sheet.range('BF49:BI54').options(pd.DataFrame, header=1).value
+
+    market_data = data.to_dict(orient='records')
+
+    
+    f0 = 2.0  # Prezzo forward
+    strike = 2.0  # Strike (ATM)
+    var_cov_matrix = np.array([[0.04, 0.02], [0.02, 0.03]])  # Matrice di varianza-covarianza
+
+    
+    helpers = []
+    for data in market_data:
+        helper = BlackBasketHelper(
+            expiry=data['Expiry'],
+            tenor=data['Tenor'],
+            atm_swap_rate=data['ATM swap rate'],
+            nvol=data['nVol'] / 100, 
+            strike=strike,
+            f0=f0,
+            var_cov_matrix=var_cov_matrix
+        )
+        helpers.append(helper)
+
+    # Valori iniziali per alpha, sigma e theta
+    initial_guess = [0.5] * len(helpers) + [0.2] * len(helpers) + [0.01]
+
+    calibration_results = calibrate_black_basket(helpers, initial_guess, var_cov_matrix)
+
+    sheet.range('G1').value = "Alpha Calibrati"
+    sheet.range('G2').value = calibration_results['alpha']
+
+    sheet.range('H1').value = "Sigma Calibrati"
+    sheet.range('H2').value = calibration_results['sigma']
+
+    sheet.range('I1').value = "Theta Calibrato"
+    sheet.range('I2').value = calibration_results['theta']
+
+    sheet.range('J1').value = "Errore Medio"
+    sheet.range('J2').value = calibration_results['average_error']
+
+    print("Calibrazione completata!")
+
+# Esegui la calibrazione
+if __name__ == "__main__":
+    main_calibration()
