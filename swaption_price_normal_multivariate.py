@@ -4,6 +4,7 @@ import numpy as np
 import scipy.stats as spss
 from scipy.stats import multivariate_normal
 import scipy.optimize as spopt
+from scipy.optimize import minimize
 import seaborn as sns
 import QuantLib as ql
 from QuantLib import *
