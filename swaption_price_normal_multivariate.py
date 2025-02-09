@@ -15,18 +15,29 @@ import math
 from scipy.stats import norm
 
 
-f0 = -0.0019  
+percorso = r'C:\Users\T004697\Desktop\oswap_price\DATI_TESI.xlsm'
+file = xw.Book(percorso)
+curve_sheet = file.sheets['curves']
+vols_sheet = file.sheets['vol']
+
+f0_1 = -0.0019
+f0_2 = 0.00022  
 strike = 0
 
-# Quattro pesi e volatilità per ogni basket
-alpha = [0.00624, -0.00441,0.00787, -0.00714]  
-sigma = [0.5132, 0.5132,  0.5246 , 0.5246 ,0]  
-new_alpha = f0 - strike - sum(alpha)
-alpha = np.append(alpha, new_alpha)
+alpha_1 = [0.00624, -0.00441]
+alpha_2 = [0.00787, -0.00714]  
+alpha_3 = f0_1 + f0_2 - strike - sum(alpha_1) - sum(alpha_2)
+alpha = alpha_1 + alpha_2 + [alpha_3]
 
+
+sigma = [0.5132, 0.5132]
+eta =  [0.5246 , 0.5246]  
+#creo la matrice delle standard deviation data da sigma+ eta + 0 
+stdev_array = np.array(sigma + eta)
 
 T0 = 1  # expiry swaption
-T = 5 # tenor swap
+T_1 = 5 # tenor swap
+T_2 = 10 # tenor swap
 
 n_sample = 1000000  # Numero di simulazioni
 
@@ -36,9 +47,9 @@ theta_12 = 0.0
 theta_21 = 0.0
 theta_22 = 0.00
 theta = [theta_11, theta_12, theta_21, theta_22]
-
-'prima scrivo il pricing di una swaption con n elementi nel basket sotto la simulazione del montecarlo (quindi nx2 componenti)'
-
+rho_matrix_1 = np.eye(len(alpha_1))
+rho_matrix_2 = np.eye(len(alpha_2))
+    
 def cov_matrix(sigma,theta):
     
     theta_11, theta_12, theta_21, theta_22 = theta
@@ -60,9 +71,7 @@ def cov_matrix(sigma,theta):
         [C_Z_T, identity_matrix_2]
     ])
     
-    #creo la matrice delle standard deviation 
-    stdev_matrix = np.diag(sigma[:-1])
-
+    stdev_matrix = np.diag(stdev_array)
     #creo la matrice delle covarianze 
     var_cov_matrix = stdev_matrix @ rho_matrix @ stdev_matrix
     
@@ -87,94 +96,86 @@ print("Matrice di cross-correlation (C_Z):")
 print(var_cov_matrix[:2, 2])  
 
 print("Trasposta della matrice di cross-correlation (C_Z_T):")
-print(var_cov_matrix[2:, :2])  
+print(var_cov_matrix[2:, :2]) 
+print("Covariance matrix:")
+print(rho_matrix) 
 
 print("Matrice di varianza-covarianza:")
 print(var_cov_matrix)
 
+#pricer con metodo Montecarlo generico per swaption 
 
-## da rivedeere simulazione montecarlo. non coincide con l'implied vol della swaption descritta dal paper
+def BlackBasketPayoffMC(f0, strike, alpha, sigma, rho_matrix, T0, n_sample=1000000, seed=42, mc_error=True):
+    
+    n_elements = len(alpha)
 
-def BlackBasketPayoffMC(f0, strike, alpha, sigma, rho_matrix, T0, n_sample=1000000, seed=42, mc_error=False):
-    
-     n_elements = len(alpha) - 1
-    
-     # escludo l'ultimo valore di alpha che corrisponde a (f0 - K -alpha[i])
-     alpha = alpha[:n_elements]
-     sigma = sigma[:n_elements]
-        
-     #generazione di random variables indipendenti
-     mean = np.zeros(n_elements)
-     eps = spss.multivariate_normal.rvs(mean=mean, cov= rho_matrix, size=n_sample, random_state=seed)
+    mean = np.zeros(n_elements)
+    eps = spss.multivariate_normal.rvs(mean=mean, cov= rho_matrix, size=n_sample, random_state=seed)
 
      
     # Drift e diffusione per ogni componente del basket
-     drift = -0.5 * np.array(sigma) ** 2 * T0
-     diff = np.array([sigma[i] * np.sqrt(T0) * eps[:, i] for i in range(n_elements)])
+    drift = -0.5 * np.array(sigma) ** 2 * T0
+    diff = np.array([sigma[i] * np.sqrt(T0) * eps[:, i] for i in range(n_elements)])
     
-     basket = np.exp(drift[:, None] + diff) - 1
+    basket = np.exp(drift[:, None] + diff) - 1
     
-     # Somma di tutti i 4 componenti per formare il basket finale
-     basket = np.sum(np.array(alpha)[:, None] * basket, axis=0)
+    # Somma di tutti i 4 componenti per formare il basket finale
+    basket = np.sum(np.array(alpha)[:, None] * basket, axis=0)
     
-     Rt = f0 + basket
+    Rt = f0 + basket
     
-     # Payoff della swaption
-     payoff_sample = np.clip(Rt - strike, 0, np.inf)
-     payoff_mean = payoff_sample.mean()
+    # Payoff della swaption
+    payoff_sample = np.clip(Rt - strike, 0, np.inf)
+    payoff_mean = payoff_sample.mean()
     
-     if mc_error:
+    if mc_error:
          estimate_variance = payoff_sample.var(ddof=1) / n_sample
          mc_error_value = math.sqrt(estimate_variance)
          return payoff_mean, mc_error_value
+     
+    return payoff_mean 
+
+#per swaption 1
+payoff_1, stdev_1 = BlackBasketPayoffMC(f0_1, strike, alpha_1, sigma, rho_matrix_1, T0, n_sample=n_sample, seed = 42, mc_error=True)
     
-     return payoff_mean
+#per swaption 2
+payoff_2, stdev_2 = BlackBasketPayoffMC(f0_2, strike, alpha_2, eta, rho_matrix_2, T0, n_sample=n_sample, seed = 42, mc_error=True)
 
+#Calcolo degli intervalli di confidenza
+q99 = spss.norm.ppf(0.99)
+#per swaption 1
+mc_payoff_ub_1 = payoff_1 + q99 * stdev_1
+mc_payoff_lb_1 = payoff_1 - q99 * stdev_1
 
-
-'questa matrice mi serve per applicare la correzione tra gli elementi del black basket'
-
-
-q99= spss.norm.ppf(0.99)
-mc_forward_payoff, mc_stdev = BlackBasketPayoffMC(f0, strike, alpha, sigma, rho_matrix, T0 , n_sample = 1000000, mc_error = True)
-mc_payoff_ub = mc_forward_payoff + q99*mc_stdev    
-mc_payoff_lb = mc_forward_payoff - q99*mc_stdev
-
-mc_ivol_ub = ql.bachelierBlackFormulaImpliedVol(ql.Option.Call, strike, f0, T0, mc_payoff_ub, discount = 1) *1e4   
-mc_ivol_lb = ql.bachelierBlackFormulaImpliedVol(ql.Option.Call, strike, f0, T0, mc_payoff_lb, discount = 1) *1e4
-mc_ivol = ql.bachelierBlackFormulaImpliedVol(ql.Option.Call, strike, f0, T0, mc_forward_payoff, discount = 1) *1e4 
-
-print(f"mc payoff ({T0}y{T}y @ {strike*100:.2f}%):\t\t{mc_forward_payoff*1e4:.2f}bps / [{mc_payoff_lb*1e4:.2f}, {mc_payoff_ub*1e4:.2f}]bps")
-print(f"mc ivol:\t\t\t\t{mc_ivol:.2f}bps / [{mc_ivol_lb:.2f}, {mc_ivol_ub:.2f}]bps")
-print()
-
-#plot da rivedere 
-
-# def plot_volatility():
+#Calcolo delle volatilità implicite con Bachelier
+mc_ivol_ub_1 = ql.bachelierBlackFormulaImpliedVol(ql.Option.Call, strike, f0_1, T0, mc_payoff_ub_1, discount=1) * 1e4
+mc_ivol_lb_1 = ql.bachelierBlackFormulaImpliedVol(ql.Option.Call, strike, f0_1, T0, mc_payoff_lb_1, discount=1) * 1e4
+mc_ivol_1 = ql.bachelierBlackFormulaImpliedVol(ql.Option.Call, strike, f0_1, T0, payoff_1, discount=1) * 1e4
     
-#     strikes = np.arange(-0.015, 0.015 + 0.005, 0.005)
-#     black_vols = []
+#per swaption 2 
+mc_payoff_ub_2 = payoff_2 + q99 * stdev_2
+mc_payoff_lb_2 = payoff_2 - q99 * stdev_2
 
+# Calcolo delle volatilità implicite con Bachelier
+mc_ivol_ub_2 = ql.bachelierBlackFormulaImpliedVol(ql.Option.Call, strike, f0_2, T0, mc_payoff_ub_2, discount=1) * 1e4
+mc_ivol_lb_2 = ql.bachelierBlackFormulaImpliedVol(ql.Option.Call, strike, f0_2, T0, mc_payoff_lb_2, discount=1) * 1e4
+mc_ivol_2 = ql.bachelierBlackFormulaImpliedVol(ql.Option.Call, strike, f0_2, T0, payoff_2, discount=1) * 1e4
 
-#     for strike in strikes:
-#         Rsample = BlackBasketPayoffMC(f0, strike, alpha, sigma, rho, T0 , n_sample = 1000000, mc_error = True)
-#         atm_price = np.clip(Rsample - strike, 0, np.inf).mean()
-#         black_vol = ql.bachelierBlackFormulaImpliedVol(ql.Option.Call, strike, f0, T0, atm_price, discount=1)
-#         black_vols.append(black_vol)
+# Stampa risultati
+print("Swaption 1:")
+print(f"Payoff mean: {payoff_1*1e4:.2f}bps, LB: {mc_payoff_lb_1*1e4:.2f}bps, UB: {mc_payoff_ub_1*1e4:.2f}bps")
+print(f"Implied Volatility: {mc_ivol_1:.2f}bps")
+
+print("\nSwaption 2:")
+print(f"Payoff mean: {payoff_2*1e4:.2f}bps, LB: {mc_payoff_lb_2*1e4:.2f}bps, UB: {mc_payoff_ub_2*1e4:.2f}bps")
+print(f"Implied Volatility: {mc_ivol_2:.2f}bps")
     
-#     plt.figure(figsize=(10, 6))
-#     plt.plot(strikes, black_vols, marker='o', linestyle='-', color='b', label='Volatilità')
-#     plt.xlabel('Strike')
-#     plt.ylabel('Black Volatility')
-#     plt.title('Black Volatility vs Strike')
-#     plt.legend()
-#     plt.grid(True)
-#     plt.show()
 
-# plot_volatility()
-
-
-# prima di implementare il metodo di approssimanzione con il moltiplicatore di Lagrange, controlliamo se con la formula chiusa base senza iterazioni otteniamo lo stesso risultato del mecaaa
+def build_var_matrix(std_dev):
+    #Crea una matrice 2x2 di varianze a partire da standard deviation.
+    std_dev_matrix = np.diag(std_dev)  
+    variance_matrix = std_dev_matrix @ std_dev_matrix  
+    return variance_matrix
 
 def calculate_B(strike, f0, alpha, sigma, var_cov_matrix, expiry):
     
@@ -197,47 +198,82 @@ def calculate_B(strike, f0, alpha, sigma, var_cov_matrix, expiry):
     
     return B, total_stdev
 
+#costruisco le matrici var_cov che dovranno essere utilizzare per il calcolo di B in caso di signole Swaption
+var_cov_matrix_1 = build_var_matrix(sigma)
+var_cov_matrix_2 = build_var_matrix(eta)
 
-def calculate_Gamma(beta, var_cov_matrix,expiry):
+B_1, total_stdev_1 = calculate_B(strike, f0_1, alpha_1, sigma, var_cov_matrix_1, T0)
+B_2, total_stdev_2 = calculate_B(strike, f0_2, alpha_2, eta, var_cov_matrix_2, T0)
+
+
+#Creo B per la midcurve swaption 
+def calculate_B_MC(f0_1, f0_2, strike, alpha, var_cov_matrix, expiry):
     
-    beta = np.array(beta).reshape((-1, 1))  # Vettore colonna
+    n_elements = len(alpha)
+    
+    # Converte alpha in un array NumPy e lo trasforma in un vettore colonna
+    alpha = np.array(alpha).reshape((n_elements, 1)) 
+    alpha_T = alpha.T  
+    
+    stdev = [sigma[i]*math.sqrt(expiry) for i in range(n_elements)] 
+    var = [stdev[i]*stdev[i] for i in range(n_elements)]
+    numerator = strike - (f0_1 + f0_2) + 0.5 * sum(alpha[i] * var[i] for i in range(n_elements))
+        
+    denominator_B_MC = np.dot(np.dot(alpha_T,var_cov_matrix), alpha)
+    denominator_B_MC = denominator_B_MC.item()
+            
+    total_stdev = math.sqrt(denominator_B_MC)
+     
+    B_MC = numerator / total_stdev
+    
+    return B_MC, total_stdev
+
+def calculate_Gamma(beta, var_cov_matrix, expiry):
+    
+    beta = np.array(beta).reshape((-1, 1))
     # Calcolo di gamma utilizzando la matrice di varianza-covarianza
     gamma = np.dot(var_cov_matrix, beta) * expiry
 
     return gamma.flatten()
-    
 
 def BlackBasketApprossimativePayoff(f0, strike, alpha, sigma, theta, var_cov_matrix, expiry):
-    
     n_elements = len(alpha)
     
     B, total_stdev = calculate_B(strike, f0, alpha, sigma, var_cov_matrix, expiry)
-    beta = [alpha[i] / total_stdev for i in range(n_elements)]
-    gamma = calculate_Gamma(beta, var_cov_matrix, expiry)
-    gamma = gamma.flatten()
+    beta = np.array(alpha)/ total_stdev
+    gamma = calculate_Gamma(beta,var_cov_matrix, expiry)
     
     cdf_values = [norm.cdf(gamma[i] - B) for i in range(n_elements)]
 
-    payoff = np.dot(alpha, cdf_values)
+    payoff = np.dot(alpha, cdf_values) + (f0 - strike - sum(alpha)) * norm.cdf(-B)
    
-    return payoff
+    return payoff, B, gamma
 
-def BlackBasketObjectiveFunctionTheta(theta11, f0, strike, alpha, sigma, expiry, midcurve_market_price):
-    theta = [theta11, 0.0, 0.0, 0.0]
-    return (BlackBasketApprossimativePayoff(f0, strike, alpha, sigma, theta, expiry) - midcurve_market_price)**2
+analytical_forward_payoff_1, B_1, gamma_1 = BlackBasketApprossimativePayoff(f0_1, strike, alpha_1,sigma, theta, var_cov_matrix_1, T0)
+analytical_forward_payoff_2, B_2, gamma_2 = BlackBasketApprossimativePayoff(f0_2, strike, alpha_2, eta, theta, var_cov_matrix_2, T0)
 
+# Verifica e conversione in scalare per payoff_1
+if isinstance(analytical_forward_payoff_1, np.ndarray):
+    analytical_forward_payoff_1 = analytical_forward_payoff_1.item()
 
-analytical_forward_payoff = BlackBasketApprossimativePayoff(f0, strike, alpha, sigma, theta, var_cov_matrix, T0)
+# Verifica e conversione in scalare per payoff_2
+if isinstance(analytical_forward_payoff_2, np.ndarray):
+    analytical_forward_payoff_2 = analytical_forward_payoff_2.item()
 
-if isinstance(analytical_forward_payoff, np.ndarray):
-    analytical_forward_payoff = analytical_forward_payoff.item()
     
-analytical_ivol = ql.bachelierBlackFormulaImpliedVol(ql.Option.Call, strike, f0, T0, analytical_forward_payoff, discount=1) * 1e4
-
+analytical_ivol_1 = ql.bachelierBlackFormulaImpliedVol(ql.Option.Call, strike, f0_1, T0, analytical_forward_payoff_1, discount=1) * 1e4
+analytical_ivol_2 = ql.bachelierBlackFormulaImpliedVol(ql.Option.Call, strike, f0_2, T0, analytical_forward_payoff_2, discount=1) * 1e4
     
-print(f"analytical payoff ({T0}y{T}y @ {strike*100:.2f}%):\t{analytical_forward_payoff*1e4:.2f}bps")
-print(f"analytical ivol:\t\t\t{analytical_ivol:.2f}bps")
-print()
+print("Swaption 1:")
+print(f"Analytical Payoff ({T0}y @ {strike*100:.2f}%):\t{analytical_forward_payoff_1*1e4:.2f}bps")
+print(f"Analytical Implied Volatility:\t\t\t{analytical_ivol_1:.2f}bps")
+
+print("\nSwaption 2:")
+print(f"Analytical Payoff ({T0}y @ {strike*100:.2f}%):\t{analytical_forward_payoff_2*1e4:.2f}bps")
+print(f"Analytical Implied Volatility:\t\t\t{analytical_ivol_2:.2f}bps")
+
+
+
 
 
 
@@ -267,18 +303,29 @@ class AnnuityApproximation:
             annuities.append(annuity)
 
         return annuities
+    
+    def calculate_mid_curve_annuity(self, annuities):
 
-maturities = [2+T0, 5+T0]  
-rates = [-0.003, -0.0019] 
-T0 = 1
+        #Calcolo l'annuity della mid-curve come differenza tra le due annuity
+        if len(annuities) < 2:
+            raise ValueError("At least two annuities are needed to calculate the mid-curve annuity.")
+        
+        mid_curve_annuity = annuities[1] - annuities[0]
+        return mid_curve_annuity
+
+maturities = [T_1 + T0, T_2 + T0]  
+rates = [f0_1, f0_2] 
+T0 = T0
 
 annuity_rates = AnnuityApproximation(T0=T0, maturities=maturities, rates=rates)
 
 annuities = annuity_rates.calculate_annuity()
 
 for i, annuity in enumerate(annuities):
-    print(f"Annuity_{maturities[i]}Y: {annuity:.6f}")
+     print(f"Annuity_{maturities[i]}Y: {annuity:.6f}")
 
+mid_curve_annuity = annuity_rates.calculate_mid_curve_annuity(annuities)
+print(f"MC Annuity: {mid_curve_annuity:.6f}")
 
 class MeasureApproximation:
     def __init__(self, annuities, maturities, T0, rates):
@@ -505,43 +552,6 @@ iterative_ivol = ql.bachelierBlackFormulaImpliedVol(ql.Option.Call, strike, f0, 
 
 print(f"iterative payoff ({T0}y{T}y @ {strike*100:.2f}%):\t{iterative_forward_payoff*1e4:.2f}bps")
 print(f"iterative ivol:\t\t\t\t{iterative_ivol:.2f}bps")
-
-
-def GetData():
-    wb = xw.Book(r'C:\Users\T004697\Desktop\TESI\DATI _TESI.xlsx')
-    sh1 = wb.sheets['Eur6m']
-    sh1 = wb.sheets['ESTR']
-    sh2 = wb.sheets['Vol']
-  
-    #curve
-    df1 = sh1.range('A1').options(pd.DataFrame, expand='table').value
-    df2 = sh2.range('A1').options(pd.DataFrame, expand='table').value
-
-
-    
-    Eur6m = DiscountCurve([Date.from_date(d) for d in df1.index.to_list()],
-                                                         df1['CURVE_QUOTE'].to_list(),
-                                                         Actual360())
-    ESTR = DiscountCurve([Date.from_date(d) for d in df2.index.to_list()],
-                                                         df2['CURVE_QUOTE'].to_list(),
-                                                         Actual360())
-
-   # abilito estrapolazione per entrambe le curve
-    eur6m_curve.enableExtrapolation()
-    estr_curve.enableExtrapolation()   
-    
-    # Crea gli handle delle curve
-    eur6m_handle = RelinkableYieldTermStructureHandle(eur6m_curve)
-    estr_handle = RelinkableYieldTermStructureHandle(estr_curve)
-    
-    return eur6m_handle, estr_handle
-
-    # Utilizzo della funzione GetData
-    eur6m_handle, estr_handle = GetData()
-
-'generalizzo formula Annuity'
-'Sulla base dell eq 28 è necessario annuity di R1, annuity di R2, annuity midcurve ' 
-
 
 
 
