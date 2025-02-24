@@ -284,7 +284,7 @@ def objective_function_swaption_1(params, market_swaption_1):
     for i, strike in enumerate(market_swaption_1['strike']):
         model_price = BlackBasketApprossimativePayoff(market_swaption_1['f0'], market_swaption_1['strike'][i], alpha_1, sigma, theta, var_cov_matrix, market_swaption_1['expiry']).item()
 
-        print(f"Strike: {strike}, Model Price: {model_price}")
+        # print(f"Strike: {strike}, Model Price: {model_price}")
         
         error = (model_price - market_swaption_1['market_prices'][i]) / (market_swaption_1['vegas'][i] * market_swaption_1["black_vols"][1])
         errors.append(error ** 2)
@@ -300,7 +300,7 @@ def objective_function_swaption_2(params, market_swaption_2):
     for i, strike in enumerate(market_swaption_2['strike']):
         model_price = BlackBasketApprossimativePayoff(market_swaption_2['f0'], market_swaption_2['strike'][i], alpha_2, eta, theta, var_cov_matrix, market_swaption_2['expiry']).item()
         
-        print(f"Strike: {strike}, Model Price: {model_price}")
+        # print(f"Strike: {strike}, Model Price: {model_price}")
 
         error = (model_price - market_swaption_2['market_prices'][i]) / (market_swaption_2['vegas'][i] * market_swaption_2["black_vols"][1])
         errors.append(error ** 2)
@@ -328,57 +328,60 @@ def calibrate_black_basket_swaption_2(market_swaption_2, objective_function_swap
     else:
         return None
 
-def calibrate_black_basket_swaption_ivol_1(market_swaption_1, model_prices_1, initial_params_1):
 
-    def objective_function_ivol_1(params, market_swaption_1, model_prices_1):  
-        alpha_1 = params[:2] 
-        sigma = params[2:4]
-        var_cov_matrix = build_var_matrix(sigma)
-                                          
-        errors = []
+def objective_function_ivol_1(params, market_swaption_1):  
+    alpha_1 = params[:2] 
+    sigma = params[2:4] 
         
-        for i, strike in enumerate(market_swaption_1['strike']):
-            model_price = model_prices_1[i]
+    var_cov_matrix = build_var_matrix(sigma)
+                                              
+    errors = []
+    for i, strike in enumerate(market_swaption_1['strike']):
+        model_price = BlackBasketApprossimativePayoff(market_swaption_1['f0'], strike, alpha_1, sigma, theta, var_cov_matrix, market_swaption_1['expiry']).item()
+                
+        model_ivol = ql.bachelierBlackFormulaImpliedVol(ql.Option.Call, strike, market_swaption_1['f0'], market_swaption_1["expiry"], model_price, discount=1)
+        market_ivol = market_swaption_1['market_ivols'][i]
+                
+        error = (model_ivol - market_ivol) / market_ivol
+        errors.append(error ** 2)
+                
+    return np.sum(errors)
             
-            model_ivol = ql.bachelierBlackFormulaImpliedVol(ql.Option.Call, strike, market_swaption_1['f0'], market_swaption_1["expiry"], model_price, discount=1)
-            market_ivol = market_swaption_1['market_ivols'][i]
-            
-            error = (model_ivol - market_ivol) / market_ivol
-            errors.append(error ** 2)
-            
-            return np.sum(errors)
-            
-        
+def calibrate_black_basket_swaption_ivol_1(market_swaption_1, objective_function_ivol_1,initial_params_1):       
     x_0 = list(initial_params_1[0]) + list(initial_params_1[1]) 
     bounds = [(-np.inf, np.inf), (-np.inf, np.inf), (0.0, np.inf), (0.0, np.inf)]
         
-    result = opt.minimize(objective_function_ivol_1, x_0, args=(market_swaption_1, model_prices_1), bounds=bounds, method='SLSQP', options={'disp': True})
+    result = opt.minimize(objective_function_ivol_1, x_0, args=(market_swaption_1), bounds=bounds, method='SLSQP', options={'disp': True})
         
     if result.success:
         return result.x[:2], result.x[2:4]
     else:
         return None 
 
-def calibrate_black_basket_swaption_ivol_2(market_swaption_2, model_prices_2, initial_params_2):
-    def objective_function_ivol_2(params, market_swaption_2, model_prices_2):
-        alpha_1 = params[:2]
-        eta = params[2:4]
-        var_cov_matrix = build_var_matrix(eta)
-        errors = []
-        
-        for i, strike in enumerate(market_swaption_2['strike']):
-            model_price = model_prices_2[i]  
-            
-            model_ivol = ql.bachelierBlackFormulaImpliedVol(ql.Option.Call, strike, market_swaption_2['f0'], market_swaption_2["expiry"], model_price, discount=1)
-            market_ivol = market_swaption_2['market_ivols'][i]
-                
-            error = (model_ivol - market_ivol) / market_ivol
-            errors.append(error ** 2)    
 
+def objective_function_ivol_2(params, market_swaption_2):
+    alpha_2 = params[:2] 
+    eta = params[2:4] 
+        
+    var_cov_matrix = build_var_matrix(eta)
+    errors = []
+        
+    for i, strike in enumerate(market_swaption_2['strike']):
+        model_price = BlackBasketApprossimativePayoff(market_swaption_2['f0'], strike, alpha_2, eta, theta, var_cov_matrix, market_swaption_2['expiry']).item()
+            
+        model_ivol = ql.bachelierBlackFormulaImpliedVol(ql.Option.Call, strike, market_swaption_2['f0'], market_swaption_2["expiry"], model_price, discount=1)
+        market_ivol = market_swaption_2['market_ivols'][i]
+                
+        error = (model_ivol - market_ivol) / market_ivol
+        errors.append(error ** 2)
+            
+    return np.sum(errors)
+
+def calibrate_black_basket_swaption_ivol_2(market_swaption_2, objective_function_ivol_2, initial_params_2):
     x_0 = list(initial_params_2[0]) + list(initial_params_2[1]) 
     bounds = [(-np.inf, np.inf), (-np.inf, np.inf), (0.0, np.inf), (0.0, np.inf)]
          
-    result = opt.minimize(objective_function_ivol_2, x_0, args=(market_swaption_2, model_prices_2), bounds=bounds, method='SLSQP', options={'disp': True})
+    result = opt.minimize(objective_function_ivol_2, x_0, args=(market_swaption_2), bounds=bounds, method='SLSQP', options={'disp': True})
          
     if result.success:
         return result.x[:2], result.x[2:4]
@@ -530,17 +533,28 @@ def main():
         "expiry": 1
     }
     
+    #prima calibrazione
+    
     calibrated_params_1 = calibrate_black_basket_swaption_1(market_swaption_1, objective_function_swaption_1)
     calibrated_params_2 = calibrate_black_basket_swaption_2(market_swaption_2, objective_function_swaption_2)
     
-    print("Parametri calibrati per Swaption 1:", calibrated_params_1)
-    print("Parametri calibrati per Swaption 2:", calibrated_params_2)
+    print("Parametri prima calibrazione per Swaption 1:", calibrated_params_1)
+    print("Parametri prima calibrazione per Swaption 2:", calibrated_params_2)
+    
+    #seconda calibrazione
+    
+    calibrated_ivol_params_1 = calibrate_black_basket_swaption_ivol_1(market_swaption_1, objective_function_ivol_1, calibrated_params_1)
+    calibrated_ivol_params_2 = calibrate_black_basket_swaption_ivol_2(market_swaption_2, objective_function_ivol_2, calibrated_params_2)
+
+    print("Parametri seconda calibrazione per Swaption 1:", calibrated_ivol_params_1)
+    print("Parametri seconda calibrazione per Swaption 2:", calibrated_ivol_params_2)
+    
 
     
 
     ## plot normal ivols - swaption 1 e 2
-    alpha_1 = calibrated_params_1[0] # Array che include 2 alpha per swaption
-    sigma = calibrated_params_1[1]  # Array che include 2 sigma per swaption
+    alpha_1 = calibrated_ivol_params_1[0] # Array che include 2 alpha per swaption
+    sigma = calibrated_ivol_params_1[1]  # Array che include 2 sigma per swaption
     var_cov_matrix_sigma = build_var_matrix(sigma)
 
     model_prices_1 = []
@@ -556,8 +570,8 @@ def main():
         market_ivol = ql.bachelierBlackFormulaImpliedVol(ql.Option.Call, strike, market_swaption_1['f0'], market_swaption_1["expiry"], market_swaption_1['market_prices'][i], discount=1) * 1e4
         market_ivols_1.append(market_ivol)
 
-    alpha_2 = calibrated_params_2[0] # Array che include 2 alpha per swaption
-    eta = calibrated_params_2[1]  # Array che include 2 sigma per swaption
+    alpha_2 = calibrated_ivol_params_2[0] # Array che include 2 alpha per swaption
+    eta = calibrated_ivol_params_2[1]  # Array che include 2 sigma per swaption
     var_cov_matrix_eta = build_var_matrix(eta)
 
     model_prices_2 = []
@@ -586,14 +600,7 @@ def main():
     
     plot_ivol_smile(strike_spread_1, model_ivols_1, market_ivols_1,
                     strike_spread_2, model_ivols_2, market_ivols_2)
-    
-    
-    calibrated_ivol_params_1 = calibrate_black_basket_swaption_ivol_1(market_swaption_1, model_prices_1, calibrated_params_1)
-    calibrated_ivol_params_2 = calibrate_black_basket_swaption_ivol_2(market_swaption_2, model_prices_2, calibrated_params_2)
 
-    print("Parametri finali calibrati per Swaption 1:", calibrated_ivol_params_1)
-    print("Parametri finali calibrati per Swaption 2:", calibrated_ivol_params_2)
-    
     
 if __name__ == "__main__":
     main()
