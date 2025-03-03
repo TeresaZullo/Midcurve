@@ -36,7 +36,7 @@ eta =  [0.5246 , 0.5246]
 #creo la matrice delle standard deviation data da sigma+ eta + 0 
 stdev_array = np.array(sigma + eta)
 
-T0 = 1  # expiry swaption
+expiry = 5  # expiry swaption
 T_1 = 5 # tenor swap
 T_2 = 10 # tenor swap
 
@@ -106,7 +106,7 @@ print(var_cov_matrix)
 
 #pricer con metodo Montecarlo generico per swaption 
 
-def BlackBasketPayoffMC(f0, strike, alpha, sigma, rho_matrix, T0, n_sample=1000000, seed=42, mc_error=True):
+def BlackBasketPayoffMC(f0, strike, alpha, sigma, rho_matrix, expiry, n_sample=1000000, seed=42, mc_error=True):
     
     n_elements = len(alpha)
 
@@ -115,8 +115,8 @@ def BlackBasketPayoffMC(f0, strike, alpha, sigma, rho_matrix, T0, n_sample=10000
 
      
     # Drift e diffusione per ogni componente del basket
-    drift = -0.5 * np.array(sigma) ** 2 * T0
-    diff = np.array([sigma[i] * np.sqrt(T0) * eps[:, i] for i in range(n_elements)])
+    drift = -0.5 * np.array(sigma) ** 2 * expiry
+    diff = np.array([sigma[i] * np.sqrt(expiry) * eps[:, i] for i in range(n_elements)])
     
     basket = np.exp(drift[:, None] + diff) - 1
     
@@ -137,10 +137,10 @@ def BlackBasketPayoffMC(f0, strike, alpha, sigma, rho_matrix, T0, n_sample=10000
     return payoff_mean 
 
 #per swaption 1
-payoff_1, stdev_1 = BlackBasketPayoffMC(f0_1, strike, alpha_1, sigma, rho_matrix_1, T0, n_sample=n_sample, seed = 42, mc_error=True)
+payoff_1, stdev_1 = BlackBasketPayoffMC(f0_1, strike, alpha_1, sigma, rho_matrix_1, expiry, n_sample=n_sample, seed = 42, mc_error=True)
     
 #per swaption 2
-payoff_2, stdev_2 = BlackBasketPayoffMC(f0_2, strike, alpha_2, eta, rho_matrix_2, T0, n_sample=n_sample, seed = 42, mc_error=True)
+payoff_2, stdev_2 = BlackBasketPayoffMC(f0_2, strike, alpha_2, eta, rho_matrix_2, expiry, n_sample=n_sample, seed = 42, mc_error=True)
 
 #Calcolo degli intervalli di confidenza
 q99 = spss.norm.ppf(0.99)
@@ -149,18 +149,18 @@ mc_payoff_ub_1 = payoff_1 + q99 * stdev_1
 mc_payoff_lb_1 = payoff_1 - q99 * stdev_1
 
 #Calcolo delle volatilità implicite con Bachelier
-mc_ivol_ub_1 = ql.bachelierBlackFormulaImpliedVol(ql.Option.Call, strike, f0_1, T0, mc_payoff_ub_1, discount=1) * 1e4
-mc_ivol_lb_1 = ql.bachelierBlackFormulaImpliedVol(ql.Option.Call, strike, f0_1, T0, mc_payoff_lb_1, discount=1) * 1e4
-mc_ivol_1 = ql.bachelierBlackFormulaImpliedVol(ql.Option.Call, strike, f0_1, T0, payoff_1, discount=1) * 1e4
+mc_ivol_ub_1 = ql.bachelierBlackFormulaImpliedVol(ql.Option.Call, strike, f0_1, expiry, mc_payoff_ub_1, discount=1) * 1e4
+mc_ivol_lb_1 = ql.bachelierBlackFormulaImpliedVol(ql.Option.Call, strike, f0_1, expiry, mc_payoff_lb_1, discount=1) * 1e4
+mc_ivol_1 = ql.bachelierBlackFormulaImpliedVol(ql.Option.Call, strike, f0_1, expiry, payoff_1, discount=1) * 1e4
     
 #per swaption 2 
 mc_payoff_ub_2 = payoff_2 + q99 * stdev_2
 mc_payoff_lb_2 = payoff_2 - q99 * stdev_2
 
 # Calcolo delle volatilità implicite con Bachelier
-mc_ivol_ub_2 = ql.bachelierBlackFormulaImpliedVol(ql.Option.Call, strike, f0_2, T0, mc_payoff_ub_2, discount=1) * 1e4
-mc_ivol_lb_2 = ql.bachelierBlackFormulaImpliedVol(ql.Option.Call, strike, f0_2, T0, mc_payoff_lb_2, discount=1) * 1e4
-mc_ivol_2 = ql.bachelierBlackFormulaImpliedVol(ql.Option.Call, strike, f0_2, T0, payoff_2, discount=1) * 1e4
+mc_ivol_ub_2 = ql.bachelierBlackFormulaImpliedVol(ql.Option.Call, strike, f0_2, expiry, mc_payoff_ub_2, discount=1) * 1e4
+mc_ivol_lb_2 = ql.bachelierBlackFormulaImpliedVol(ql.Option.Call, strike, f0_2, expiry, mc_payoff_lb_2, discount=1) * 1e4
+mc_ivol_2 = ql.bachelierBlackFormulaImpliedVol(ql.Option.Call, strike, f0_2, expiry , payoff_2, discount=1) * 1e4
 
 # Stampa risultati
 print("Swaption 1:")
@@ -203,8 +203,8 @@ def calculate_B(strike, f0, alpha, sigma, var_cov_matrix, expiry):
 var_cov_matrix_1 = build_var_matrix(sigma)
 var_cov_matrix_2 = build_var_matrix(eta)
 
-B_1, total_stdev_1 = calculate_B(strike, f0_1, alpha_1, sigma, var_cov_matrix_1, T0)
-B_2, total_stdev_2 = calculate_B(strike, f0_2, alpha_2, eta, var_cov_matrix_2, T0)
+B_1, total_stdev_1 = calculate_B(strike, f0_1, alpha_1, sigma, var_cov_matrix_1, expiry)
+B_2, total_stdev_2 = calculate_B(strike, f0_2, alpha_2, eta, var_cov_matrix_2, expiry)
 
 
 #Creo B per la midcurve swaption 
@@ -250,8 +250,8 @@ def BlackBasketApprossimativePayoff(f0, strike, alpha, sigma, theta, var_cov_mat
    
     return payoff
 
-analytical_forward_payoff_1 = BlackBasketApprossimativePayoff(f0_1, strike, alpha_1,sigma, theta, var_cov_matrix_1, T0)
-analytical_forward_payoff_2 = BlackBasketApprossimativePayoff(f0_2, strike, alpha_2, eta, theta, var_cov_matrix_2, T0)
+analytical_forward_payoff_1 = BlackBasketApprossimativePayoff(f0_1, strike, alpha_1,sigma, theta, var_cov_matrix_1, expiry)
+analytical_forward_payoff_2 = BlackBasketApprossimativePayoff(f0_2, strike, alpha_2, eta, theta, var_cov_matrix_2, expiry)
 
 # Verifica e conversione in scalare per payoff_1
 if isinstance(analytical_forward_payoff_1, np.ndarray):
@@ -262,15 +262,15 @@ if isinstance(analytical_forward_payoff_2, np.ndarray):
     analytical_forward_payoff_2 = analytical_forward_payoff_2.item()
 
     
-analytical_ivol_1 = ql.bachelierBlackFormulaImpliedVol(ql.Option.Call, strike, f0_1, T0, analytical_forward_payoff_1, discount=1) * 1e4
-analytical_ivol_2 = ql.bachelierBlackFormulaImpliedVol(ql.Option.Call, strike, f0_2, T0, analytical_forward_payoff_2, discount=1) * 1e4
+analytical_ivol_1 = ql.bachelierBlackFormulaImpliedVol(ql.Option.Call, strike, f0_1, expiry, analytical_forward_payoff_1, discount=1) * 1e4
+analytical_ivol_2 = ql.bachelierBlackFormulaImpliedVol(ql.Option.Call, strike, f0_2, expiry, analytical_forward_payoff_2, discount=1) * 1e4
     
 print("Swaption 1:")
-print(f"Analytical Payoff ({T0}y @ {strike*100:.2f}%):\t{analytical_forward_payoff_1*1e4:.2f}bps")
+print(f"Analytical Payoff ({expiry}y @ {strike*100:.2f}%):\t{analytical_forward_payoff_1*1e4:.2f}bps")
 print(f"Analytical Implied Volatility:\t\t\t{analytical_ivol_1:.2f}bps")
 
 print("\nSwaption 2:")
-print(f"Analytical Payoff ({T0}y @ {strike*100:.2f}%):\t{analytical_forward_payoff_2*1e4:.2f}bps")
+print(f"Analytical Payoff ({expiry}y @ {strike*100:.2f}%):\t{analytical_forward_payoff_2*1e4:.2f}bps")
 print(f"Analytical Implied Volatility:\t\t\t{analytical_ivol_2:.2f}bps")
 
 
@@ -307,10 +307,10 @@ def objective_function_swaption_2(params, market_swaption_2):
     return np.sqrt(np.sum(errors))
 
 def calibrate_black_basket_swaption_1(market_swaption_1, objective_function_swaption_1):
-    x_0 = [0.00624, -0.00441, 0.5246, 0.5246]
+    x_0 = [0.01, 0.01, 0.60, 0.60]
     bounds = [(-np.inf, np.inf), (-np.inf, np.inf), (0.0,np.inf), (0.0,np.inf)]
     
-    result = opt.minimize(objective_function_swaption_1, x_0, args=(market_swaption_1), bounds=bounds, method='SLSQP', options={'disp': True})
+    result = opt.minimize(objective_function_swaption_1, x_0, args=(market_swaption_1), bounds=bounds, method='SLSQP', options={'disp': True, 'maxiter': 400})
     
     if result.success:
         return result.x[:2], result.x[2:4]
@@ -318,10 +318,10 @@ def calibrate_black_basket_swaption_1(market_swaption_1, objective_function_swap
         return None
 
 def calibrate_black_basket_swaption_2(market_swaption_2, objective_function_swaption_2):
-    x_0 = [0.00787, -0.00714, 0.5246, 0.5246]
+    x_0 = [0.01, -0.01, 0.70, 0.70]
     bounds = [(-np.inf, np.inf), (-np.inf, np.inf), (0.0,np.inf), (0.0,np.inf)]
     
-    result = opt.minimize(objective_function_swaption_2, x_0, args=(market_swaption_2), bounds=bounds, method='SLSQP', options={'disp': True, 'maxiter': 250})
+    result = opt.minimize(objective_function_swaption_2, x_0, args=(market_swaption_2), bounds=bounds, method='SLSQP', options={'disp': True, 'maxiter': 400})
     
     if result.success:
         return result.x[:2], result.x[2:4]
@@ -389,17 +389,25 @@ def calibrate_black_basket_swaption_2(market_swaption_2, objective_function_swap
 #         return None 
 
 
-def plot_ivol_smile(strike_spread_1, model_ivols_1, market_ivols_1,
-                    strike_spread_2, model_ivols_2, market_ivols_2):
+def plot_ivol_smile(strike_spread_1, model_ivols_1, market_ivols_1, market_swaption_1,
+                    strike_spread_2, model_ivols_2, market_ivols_2, market_swaption_2):
     
     
     fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+    
+    expiry_1 = market_swaption_1["expiry"]
+    tenor_1 = market_swaption_1["tenor"]
 
+    expiry_2 = market_swaption_2["expiry"]
+    tenor_2 = market_swaption_2["tenor"]
+    
+    title_1 = f"Swaption {expiry_1}Y{tenor_1}Y"
+    title_2 = f"Swaption {expiry_2}Y{tenor_2}Y"
     
     sns.lineplot(x=strike_spread_1, y=model_ivols_1, label="Model", color="blue", ax=axes[0])
     sns.scatterplot(x=strike_spread_1, y=market_ivols_1, label="Market", color="orange", ax=axes[0])
 
-    axes[0].set_title("Swaption 1")
+    axes[0].set_title(title_1)
     axes[0].set_xlabel("Strike (%)")
     axes[0].set_ylabel("Implied Volatility (bps)")
     axes[0].set_xticks(np.arange(-2,2.5,0.5))  
@@ -410,7 +418,7 @@ def plot_ivol_smile(strike_spread_1, model_ivols_1, market_ivols_1,
     sns.lineplot(x=strike_spread_2, y=model_ivols_2, label="Model", color="blue", ax=axes[1])
     sns.scatterplot(x=strike_spread_2, y=market_ivols_2, label="Market", color="orange", ax=axes[1])
 
-    axes[1].set_title("Swaption 2")
+    axes[1].set_title(title_2)
     axes[1].set_xlabel("Strike Spread (%)")
     axes[1].set_ylabel("Implied Volatility (bps)")
     axes[1].set_xticks(np.arange(-2,2.5,0.5)) 
@@ -457,9 +465,9 @@ class AnnuityApproximation:
         mid_curve_annuity = annuities[1] - annuities[0]
         return mid_curve_annuity
 
-maturities = [T_1 + T0, T_2 + T0]  
+maturities = [T_1 + expiry, T_2 + expiry]  
 rates = [f0_1, f0_2] 
-T0 = T0
+T0 = expiry
 
 annuity_rates = AnnuityApproximation(T0=T0, maturities=maturities, rates=rates)
 
@@ -476,7 +484,7 @@ class MeasureApproximation:
 
         self.annuities = annuities
         self.maturities = maturities
-        self.T0 = T0
+        self.expiry = expiry
         self.rates = rates
         
     def calculate_lambda(self):
@@ -496,14 +504,14 @@ class MeasureApproximation:
                 if denom == 0:
                     raise ValueError("A_j_0 and A_i_0 cannot be egual")
 
-                delta_T_squared = (T_i - self.T0)**2 - (T_j - self.T0)**2
-                lambda_i = 0.5 * (delta_T_squared / denom + (T_i - self.T0)**2 / A_i_0)
-                lambda_j = 0.5 * (delta_T_squared / denom + (T_j - self.T0)**2 / A_j_0)
+                delta_T_squared = (T_i - self.expiry)**2 - (T_j - self.expiry)**2
+                lambda_i = 0.5 * (delta_T_squared / denom + (T_i - self.expiry)**2 / A_i_0)
+                lambda_j = 0.5 * (delta_T_squared / denom + (T_j - self.expiry)**2 / A_j_0)
                 lambdas.append((lambda_i,lambda_j))
 
         return lambdas
 
-measure_approx = MeasureApproximation(annuities=annuities, maturities=maturities, T0=T0, rates=rates)
+measure_approx = MeasureApproximation(annuities=annuities, maturities=maturities, T0=expiry, rates=rates)
 
 
 lambdas = measure_approx.calculate_lambda()
@@ -511,6 +519,13 @@ lambdas = measure_approx.calculate_lambda()
 for i, (lambda_i,lambda_j) in enumerate(lambdas):
     print(f"λ_i: {lambda_i:.6f}")
     print(f"λ_j: {lambda_j:.6f}")
+    
+    
+def extract_numeric_value(cell_value):
+    # Estrae solo la parte numerica da un valore letto da Excel 
+    if isinstance(cell_value, str): 
+        return int(''.join(filter(str.isdigit, cell_value))) 
+    return int(cell_value) 
 
 def main():
     market_swaption_1 = {
@@ -521,7 +536,8 @@ def main():
         "black_vegas": list(vols_sheet.range('BF255:BR255').value),
         "bachelier_vegas": list(vols_sheet.range('CJ255:CV255').value),
         "market_ivols": list(vols_sheet.range('BU255:CF255').value),
-        "expiry": 1
+        "expiry": 5,
+        "tenor": extract_numeric_value(vols_sheet.range('I255').value),
     }
     
     market_swaption_2 = {
@@ -532,7 +548,8 @@ def main():
         "black_vegas":list(vols_sheet.range('BF256:BR256').value),
         "bachelier_vegas": list(vols_sheet.range('CJ256:CV256').value),
         "market_ivols": list(vols_sheet.range('BU256:CF256').value),
-        "expiry": 1
+        "expiry": 5,
+        "tenor": extract_numeric_value(vols_sheet.range('I256').value)
     }
     
     #prima calibrazione
@@ -597,8 +614,8 @@ def main():
     strike_spread_1 = np.linspace(-0.75, 0.75, len(market_swaption_1['strike'])) 
     strike_spread_2 = np.linspace(-0.75, 0.75, len(market_swaption_2['strike']))  
     
-    plot_ivol_smile(strike_spread_1, model_ivols_1, market_ivols_1,
-                    strike_spread_2, model_ivols_2, market_ivols_2)
+    plot_ivol_smile(strike_spread_1, model_ivols_1, market_ivols_1, market_swaption_1, 
+                    strike_spread_2, model_ivols_2, market_ivols_2, market_swaption_2)
 
     
 if __name__ == "__main__":
@@ -643,148 +660,4 @@ if __name__ == "__main__":
 #     return errors @ errors
 
 
-# 'swaption price con 4 elementi con approssimazione del black basket con lagrange'
 
-# def _black_basket_option_price(f0, strike, alpha, sigma, var_cov_matrix, gamma, B, expiry):
-    
-#     n_elements = len(alpha)
-    
-#     cdf_values = [norm.cdf(gamma[i] - B) for i in range(n_elements)]
-
-#     payoff = np.dot(alpha, cdf_values)
-    
-#     return payoff
-
-
-# def BlackBasketApproximatePayoffMaximized(f0, strike, alpha, sigma, var_cov_matrix, expiry, convergence = False):
-    
-#     n_elements = len(alpha)
-    
-#     B, total_stdev = calculate_B(strike, f0, alpha, sigma, var_cov_matrix, expiry)
-    
-#     stdev = [sigma[i]*math.sqrt(expiry) for i in range(n_elements)] 
-#     var = [stdev[i]*stdev[i] for i in range(n_elements)]
-    
-    
-#     beta = [alpha[i]/total_stdev for i in range(n_elements)]
-#     gamma = calculate_Gamma(beta, var_cov_matrix, expiry)
-#     gamma = gamma.flatten()
-    
-#     B = B.item()
-#     x0 = np.append(gamma,B)
-    
-#     #calcolo matrice var-cov inversa
-#     # Considero la sottomatrice 4x4 di var_cov_matrix, ignorando l'ultima riga e colonna
-#     var_cov_4x4 = var_cov_matrix[:4, :4]
-#     # Calcola l'inversa della sottomatrice 4x4
-#     var_cov_inv_4x4 = np.linalg.inv(var_cov_4x4)
-#     # Creo una nuova matrice 5x5 e inserisco l'inversa 4x4 al suo interno
-#     var_cov_inv = np.zeros((5, 5))
-#     var_cov_inv[:4, :4] = var_cov_inv_4x4
-    
-#     'implementazione3 con minimizzazione con moltiplicatore di Lagrange'
-#     'calcolo con il segno meno perchè posso fare solo la minimizzazione, minimizzo una funzione negativa'
-#     opt_price_func = lambda x: -_black_basket_option_price(f0, strike, alpha, sigma, var_cov_matrix, x[:n_elements], x[n_elements], expiry)
-#     opt_price_constr = lambda x:  np.dot(np.dot(x[:n_elements].T, var_cov_inv), x[:n_elements]) - 1.0
-
-#     minimization_constrains = ({"type": "eq", "fun": opt_price_constr}, )
-    
-#     opt = spopt.minimize(fun = opt_price_func, x0 = x0, method= "SLSQP", constraints= minimization_constrains)
-    
-#     if convergence:
-#         print(opt)
-        
-#     gamma = opt.x[:n_elements]
-#     B = opt.x[n_elements]
-#     print(f"stdev: {stdev}")
-#     print(f"var: {var}")
-#     print(f"Gamma ottimizzato: {gamma}")
-#     print(f"B ottimizzato: {B}")
-#     return _black_basket_option_price(f0, strike, alpha, sigma, var_cov_matrix, gamma, B, expiry)
-
-
-# maximization_forward_payoff = BlackBasketApproximatePayoffMaximized(f0, strike, alpha, sigma, var_cov_matrix, T0)
-
-# if isinstance(maximization_forward_payoff, np.ndarray):
-#     maximization_forward_payoff = maximization_forward_payoff.item()
-    
-# maximization_ivol = ql.bachelierBlackFormulaImpliedVol(ql.Option.Call, strike, f0, T0, maximization_forward_payoff, discount=1) * 1e4 
-
-
-# print(f"maximization payoff ({T0}y{T}y @ {strike*100:.2f}%):\t{maximization_forward_payoff*1e4:.2f}bps")
-# print(f"maximization ivol:\t\t\t{maximization_ivol:.2f}bps")
-
-# #proviamo a trovare gamma e B con il metodo dell'iterazione
-
-
-    
-# def _B_root(B_candidate, a, g, m):
-    
-#     n_elements = len(alpha)
-    
-#     basket = 0
-#     fprime = 0
-    
-#     for i in range(n_elements):
-#         basket_i = a[i]*np.exp(g[i]*B_candidate-0.5*g[i]*g[i])
-#         basket += basket_i 
-#         f = basket + m
-#         fprime += basket_i * g[i]
-   
-#     return f, fprime
-
- 
-# def BlackBasketPayoffIterative(f0, k, alpha, sigma, var_cov_matrix, expiry, N=2, tolerance = 1e-8, convergence = False):
-
-#     n_elements = len(alpha)
-
-#     B, total_stdev = calculate_B(strike, f0, alpha, sigma, var_cov_matrix, expiry)
-
-#     stdev = [sigma[i]*np.sqrt(expiry) for i in range(n_elements)]     
-#     var = [stdev[i]*stdev[i] for i in range(n_elements)]
-
-
-#     beta = [alpha[i]/total_stdev for i in range(n_elements)]
-#     gamma = calculate_Gamma(beta, var_cov_matrix, expiry)
-#     gamma = gamma.flatten()
-
-
-
-#    # Inizializzazione del payoff
-#     p0 = -10000
-#     p1 = _black_basket_option_price(f0, k, alpha, sigma, var_cov_matrix, gamma, B, expiry)
-
-#    # Iterazione per il calcolo di gamma e B
-#     while abs(p1 - p0) > tolerance:
-#        p0 = p1
-
-#        # Trova i gamma ottimali per ogni elemento
-#        w = np.array([alpha[i] * spss.norm.pdf(gamma[i] - B) for i in range(n_elements)])
-#        w = np.array(w).reshape((-1, 1))
-       
-#        gamma_denom = np.sqrt(np.dot(np.dot(w.T, var_cov_matrix), w).item())
-#        gamma = np.dot(var_cov_matrix, w) / gamma_denom
-#        gamma = gamma.flatten()
-       
-#        # Ottimizzazione per trovare B utilizzando la funzione _B_root generalizzata
-#        opt = spopt.root_scalar(f=_B_root, method="newton", x0=B, fprime=True,
-#                                args=(alpha, gamma, f0 - k - sum(alpha)))
-#        B = opt.root
-
-#        if convergence:
-#            print(opt)
-       
-#        p1 = _black_basket_option_price(f0, k, alpha, sigma, var_cov_matrix, gamma, B, expiry)
-   
-#     return p1
-    
-
-# iterative_forward_payoff = BlackBasketPayoffIterative(f0, strike, alpha, sigma, var_cov_matrix, T0, tolerance=1e-8)
-
-# if isinstance(iterative_forward_payoff, np.ndarray):
-#     iterative_forward_payoff = iterative_forward_payoff.item()
-    
-# iterative_ivol = ql.bachelierBlackFormulaImpliedVol(ql.Option.Call, strike, f0, T0, iterative_forward_payoff, discount=1) * 1e4
-
-# print(f"iterative payoff ({T0}y{T}y @ {strike*100:.2f}%):\t{iterative_forward_payoff*1e4:.2f}bps")
-# print(f"iterative ivol:\t\t\t\t{iterative_ivol:.2f}bps")
