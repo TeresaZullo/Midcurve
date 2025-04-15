@@ -89,17 +89,17 @@ def cov_matrix(sigma,theta):
 
 var_cov_matrix, rho_matrix = cov_matrix(sigma, theta)
 
-# eigenvalues = np.linalg.eigvals(var_cov_matrix)
-# print("Autovalori:", eigenvalues)
+eigenvalues = np.linalg.eigvals(var_cov_matrix)
+print("Autovalori:", eigenvalues)
 
 
-# print("Matrice di cross-correlation (C_Z):")
-# print(var_cov_matrix[:2, 2])  
+print("Matrice di cross-correlation (C_Z):")
+print(var_cov_matrix[:2, 2])  
 
-# print("Trasposta della matrice di cross-correlation (C_Z_T):")
-# print(var_cov_matrix[2:, :2]) 
-# print("Covariance matrix:")
-# print(rho_matrix) 
+print("Trasposta della matrice di cross-correlation (C_Z_T):")
+print(var_cov_matrix[2:, :2]) 
+print("Covariance matrix:")
+print(rho_matrix) 
 
 print("Matrice di varianza-covarianza:")
 print(var_cov_matrix)
@@ -284,6 +284,33 @@ def BlackBasketApprossimativePayoff_Adj(f0, strike, alpha, sigma, theta, var_cov
 
     return payoff    
 
+def BlackBasketApprossimativePayoffMidCurve(R_mc_0, strike, alpha_1, alpha_2, sigma_calibrated_1, sigma_calibrated_2, theta, expiry, annuity_1, annuity_2, annuity_MC):
+
+    delta_1 = -annuity_1 / annuity_MC
+    delta_2 = annuity_2 / annuity_MC
+
+    alpha_1_adj = [a * delta_1 for a in alpha_1]
+    alpha_2_adj = [a * delta_2 for a in alpha_2]
+    
+    alpha_3 = -(strike - R_mc_0 + delta_1 * sum(alpha_1) + delta_2 * sum(alpha_2))
+    
+    alpha_total = np.array(alpha_1_adj + alpha_2_adj + [alpha_3])
+    sigma_total = list(sigma_calibrated_1) + list(sigma_calibrated_2) + [0]
+    
+    var_cov_matrix_total, _ = cov_matrix(sigma_total, theta)
+    R_mc_0 = R_mc_0
+    f0_adj = strike
+
+    # Calcolo di B e gamma
+    B, total_stdev = calculate_B(R_mc_0, f0_adj, alpha_total, sigma_total, var_cov_matrix_total, expiry)
+    beta = np.array(alpha_total) / total_stdev
+    gamma = calculate_Gamma(beta, var_cov_matrix_total, expiry)
+
+    cdf_values = norm.cdf(gamma - B)
+    payoff = np.dot(alpha_total, cdf_values)
+
+    return payoff
+
 
 def objective_function_swaption_1(params, market_swaption_1):
     alpha_1 = params[:2]  # Array che include 2 alpha per swaption1
@@ -449,6 +476,37 @@ def calibrate_black_basket_swaption_sigma_2(market_swaption, alpha_fixed_list, f
         return result.x 
     else:
         return None
+    
+def objective_function_theta(theta_param, market_price, alpha_1, alpha_2, sigma_calibrated_1, sigma_calibrated_2, expiry, annuity_1, annuity_2, annuity_MC):
+    theta = [theta_param[0], 0.0, 0.0, 0.0]  
+    R_mc = vols_sheet.range('J257').value
+    strike = vols_sheet.range('J258').value
+    
+    model_price = BlackBasketApprossimativePayoffMidCurve(R_mc, strike, alpha_1, alpha_2, sigma_calibrated_1, sigma_calibrated_2, theta, expiry, annuity_1, annuity_2, annuity_MC)
+    error = (model_price - market_price)/market_price
+
+    return np.sqrt(error**2)
+
+def calibrate_theta(market_price, alpha_1, alpha_2, sigma_calibrated_1, sigma_calibrated_2, expiry, annuity_1, annuity_2, annuity_MC):
+    
+    theta_initial_guess = [-1.3] 
+    bounds = [(-np.inf, np.inf)]
+    result = opt.minimize(
+        objective_function_theta,
+        theta_initial_guess,
+        args=(market_price, alpha_1, alpha_2, sigma_calibrated_1, sigma_calibrated_2, expiry, annuity_1, annuity_2, annuity_MC),
+        bounds=bounds,
+        method='SLSQP',
+        options={'disp': True, 'maxiter': 300}
+    )
+
+    if result.success:
+        calibrated_theta = [result.x[0], 0.0, 0.0, 0.0]
+        return calibrated_theta
+    else:
+        raise ValueError("Calibrazione theta non riuscita")
+        
+        
 def plot_ivol_smile(strike_spread_1, model_ivols_1, market_ivols_1, market_swaption_1,
                     strike_spread_2, model_ivols_2, market_ivols_2, market_swaption_2):
     
@@ -488,6 +546,33 @@ def plot_ivol_smile(strike_spread_1, model_ivols_1, market_ivols_1, market_swapt
     plt.tight_layout()
     plt.show()
 
+def plot_midcurve_price(calibrated_theta, market_price_midcurve, alpha_1, alpha_2, sigma_calibrated_1, sigma_calibrated_2, expiry, annuity_1, annuity_2, annuity_MC, vols_sheet):
+
+
+    # R_mc_0 = vols_sheet.range('J257').value
+    # f0_adj = vols_sheet.range('J258').value 
+
+    R_mc_0 = 0
+    f0_adj = 0
+
+
+    model_price = BlackBasketApprossimativePayoffMidCurve(R_mc_0, f0_adj, alpha_1, alpha_2, sigma_calibrated_1, sigma_calibrated_2, calibrated_theta, expiry, annuity_1, annuity_2, annuity_MC)
+
+    labels = ['Market_price', 'Model_price']
+    prices = [market_price_midcurve, model_price]
+
+    plt.figure(figsize=(8, 5))
+    sns.barplot(x=labels, y=prices, palette='Blues_d')
+
+    plt.title('Confronto prezzo Mid-Curve Swaption')
+    plt.ylabel('Price')
+    plt.grid(axis='y', linestyle='--')
+    
+    for i, v in enumerate(prices):
+        plt.text(i, v + 0.0001, f"{v:.6f}", ha='center', va='bottom', fontsize=10, color='black')
+
+    plt.tight_layout()
+    plt.show()
 
 class AnnuityApproximation:
     def __init__(self, T0, maturities, rates):
@@ -555,7 +640,38 @@ class MeasureApproximation:
 
         return lambdas
 
+# def R_MC_0(T0, f0_1_adj, f0_2_adj, strike_1_adj, strike_2_adj, 
+#                                   alpha_1_adj_list, alpha_2_adj_list, 
+#                                   sigma_calibrated_1, sigma_calibrated_2, 
+#                                   theta, var_cov_matrix_1, var_cov_matrix_2, expiry, annuity_rates, annuity_MC):    
+#     R_mc_0_list = []
     
+#     annuities = annuity_rates.calculate_annuity()
+    
+#     annuity_1 = annuities[0]
+#     annuity_2 = annuities[1]
+    
+#     for i in range(len(strike_1_adj)):  
+#         R1_hat = BlackBasketApprossimativePayoff_Adj(f0_1_adj[i], strike_1_adj[i], alpha_1_adj_list[i], sigma_calibrated_1, theta, var_cov_matrix_1, expiry).item()
+#         R2_hat = BlackBasketApprossimativePayoff_Adj(f0_2_adj[i], strike_2_adj[i], alpha_2_adj_list[i], sigma_calibrated_2, theta, var_cov_matrix_2, expiry).item()
+#         R_mc_0 = (R2_hat * annuity_2 / annuity_MC) - (R1_hat * annuity_1 / annuity_MC)
+#         R_mc_0_list.append(R_mc_0) 
+
+#     return R_mc_0_list
+
+
+def R_MC_0(vols_sheet, annuity_rates, annuity_MC):
+    R1_hat = vols_sheet.range('J255').value
+    R2_hat = vols_sheet.range('J256').value
+
+    annuities = annuity_rates.calculate_annuity()
+    annuity_1 = annuities[0]
+    annuity_2 = annuities[1]
+
+    R_mc_0 = (R2_hat * annuity_2 - R1_hat * annuity_1) / annuity_MC
+
+    return R_mc_0
+   
 def extract_numeric_value(cell_value):
     # Estrae solo la parte numerica da un valore letto da Excel 
     if isinstance(cell_value, str): 
@@ -746,10 +862,6 @@ def main():
         "Strike Adj": strike_2_adj_list,
         "Alpha 2 Adj": alpha_2_adj_list
         })
-    # print("\n✅ Swaption 1 - Adjusted Data:")
-    # print(df_swaption_1)
-    # print("\n✅ Swaption 2 - Adjusted Data:")
-    # print(df_swaption_2)
     
     model_prices_1_adj = []
     model_ivols_1_adj = []
@@ -786,6 +898,74 @@ def main():
 
     plot_ivol_smile(strike_spread_1_adj, model_ivols_1_adj, market_ivols_1, market_swaption_1,
                 strike_spread_2_adj, model_ivols_2_adj, market_ivols_2, market_swaption_2)   
+    
+    
+    market_price_midcurve = vols_sheet.range('J249').value
+    annuity_1 = annuities[0]
+    annuity_2 = annuities[1]
+
+    calibrated_theta = calibrate_theta(
+    market_price_midcurve,
+    alpha_1,
+    alpha_2,
+    sigma_calibrated_1,
+    sigma_calibrated_2,
+    expiry,
+    annuity_1,
+    annuity_2,
+    mid_curve_annuity
+    )
+
+    print(f"Theta calibrato: {calibrated_theta}")
+    
+    # R_mc_0_list = R_MC_0(
+    # T0, 
+    # f0_1_adj, 
+    # f0_2_adj, 
+    # strike_1_adj, 
+    # strike_2_adj, 
+    # alpha_1_adj_list, 
+    # alpha_2_adj_list, 
+    # sigma_calibrated_1, 
+    # sigma_calibrated_2, 
+    # theta, 
+    # var_cov_matrix_1, 
+    # var_cov_matrix_2, 
+    # expiry,
+    # annuity_rates,       
+    # mid_curve_annuity    
+    # )
+    
+
+    R_mc_0 = R_MC_0(vols_sheet, annuity_rates, mid_curve_annuity)
+    
+    output_start_cell = 'J257'
+    vols_sheet.range(output_start_cell).value = R_mc_0
+    
+    Market_price = vols_sheet.range('J249').value
+
+    Model_price = BlackBasketApprossimativePayoffMidCurve(
+    R_mc_0 = vols_sheet.range('J257').value,                     
+    strike= vols_sheet.range('J258').value,  
+    alpha_1=alpha_1,
+    alpha_2=alpha_2,
+    sigma_calibrated_1=sigma_calibrated_1,
+    sigma_calibrated_2=sigma_calibrated_2,
+    theta=calibrated_theta,
+    expiry=expiry,
+    annuity_1=annuity_1,
+    annuity_2=annuity_2,
+    annuity_MC=mid_curve_annuity
+)
+
+
+    print("\n📊 Confronto Prezzi Mid-Curve:")
+    print(f"▪️ Prezzo di mercato  : {Market_price:.6f}")
+    print(f"▪️ Prezzo da modello  : {Model_price:.6f}")
+    print(f"▪️ Errore assoluto    : {abs(Model_price - Market_price):.6f}")
+    print(f"▪️ Errore relativo (%) : {(Model_price - Market_price) / Market_price * 100:.2f}%")
+    
+    # plot_midcurve_price(calibrated_theta, market_price_midcurve, alpha_1, alpha_2, sigma_calibrated_1, sigma_calibrated_2, expiry, annuity_1, annuity_2, mid_curve_annuity, vols_sheet)
             
 if __name__ == "__main__":
     main()
