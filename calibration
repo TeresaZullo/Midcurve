@@ -194,7 +194,23 @@ def BlackBasketApprossimativePayoff_Adj(f0, strike, alpha, sigma, var_cov_matrix
 
     return payoff    
 
-def BlackBasketApprossimativePayoffMidCurve(f0_mc, strike, alpha, sigma_calibrated, theta, expiry, annuity_1, annuity_2, Q_short, Q_long):
+def BlackBasketApprossimativePayoffMidCurve(
+    f0_mc: float,
+    strike: float,
+    alpha: npt.NDArray[np.float64] | list[float],
+    sigma_calibrated: npt.NDArray[np.float64] | list[float],
+    theta: float,
+    expiry: float,
+    annuity_1: float,
+    annuity_2: float,
+    Q_short: np.ndarray,
+    Q_long: np.ndarray,
+    tol: float = 1e-10,
+    max_iter: int = 50,
+) -> float:
+
+    alpha = np.asarray(alpha, dtype=float).reshape(-1)                # (2m,)
+    sigma_calibrated = np.asarray(sigma_calibrated, dtype=float).reshape(-1)
     
     midcurve_basket_dimension = len(alpha)
     european_basket_dimension = midcurve_basket_dimension // 2
@@ -659,26 +675,29 @@ alpha_2_adj_list, strike_2_adj_list = [], []
     var_cov_sigma1 = build_var_matrix(sigma_calibrated_1)
     var_cov_sigma2 = build_var_matrix(sigma_calibrated_2)    
 
-    model_ivols_1_adj, market_ivols_1_adj = [], []
+    model_prices_1_adj, model_ivols_1_adj, market_ivols_1_adj = [], [], []
     for i, (K_adj, alpha_1_k) in enumerate(zip(strike_1_adj_list, alpha_1_adj_list)): 
         model_price = BlackBasketApprossimativePayoff_Adj(
-            f0_1_adj[i], K_adj,alpha_1_k, sigma_calibrated_1, theta,
-            build_var_matrix(sigma_calibrated_1), market_swaption_1['expiry']
+            f0_1_adj[i], K_adj,alpha_1_k, sigma_calibrated_1,
+            var_cov_sigma1, market_swaption_1.expiry
             ).item()
         
         model_prices_1_adj.append(model_price)
 
         model_ivol = ql.bachelierBlackFormulaImpliedVol(ql.Option.Call, K_adj, f0_1_adj[i], market_swaption_1.expiry, model_price, discount=1) * 1e4
         model_ivols_1_adj.append(model_ivol)
+
+        mkt_ivol = ql.bachelierBlackFormulaImpliedVol(
+        ql.Option.Call, K_adj, f0_1_adj[i], market_swaption_1.expiry, market_swaption_1.market_prices[i], discount=1.0
+        ) * 1e4
+        market_ivols_1_adj.append(mkt_ivol)
         
-        model_prices_2_adj = []
-        model_ivols_2_adj = []
-        
+    model_prices_2_adj ,model_ivols_2_adj, market_ivols_2_adj = [], [], []
     for i, (K_adj, alpha_2_k) in enumerate(zip(strike_2_adj_list, alpha_2_adj_list)):
         alpha_2_k = np.array(alpha_2_k) 
         model_price = BlackBasketApprossimativePayoff_Adj(
-            f0_2_adj[i], K_adj, alpha_2_k, sigma_calibrated_2, theta,
-            build_var_matrix(sigma_calibrated_2), market_swaption_2.expiry
+            f0_2_adj[i], K_adj, alpha_2_k, sigma_calibrated_2,
+            var_cov_sigma2, market_swaption_2.expiry
             ).item()
     
         model_prices_2_adj.append(model_price)
@@ -686,8 +705,10 @@ alpha_2_adj_list, strike_2_adj_list = [], []
         model_ivol = ql.bachelierBlackFormulaImpliedVol(ql.Option.Call, K_adj, f0_2_adj[i], market_swaption_2.expiry, model_price, discount=1) * 1e4
         model_ivols_2_adj.append(model_ivol)
 
-    strike_spread_1_adj = np.linspace(-0.75, 0.75, len(market_swaption_1['strike']))
-    strike_spread_2_adj = np.linspace(-0.75, 0.75, len(market_swaption_2['strike']))
+        mkt_ivol = ql.bachelierBlackFormulaImpliedVol(
+        ql.Option.Call, K_adj, f0_1_adj[i], market_swaption_2.expiry, market_swaption_2.market_prices[i], discount=1.0
+        ) * 1e4
+        market_ivols_2_adj.append(mkt_ivol)
 
     plot_ivol_smile(
         market_swaption_1, model_ivols_1_adj, market_ivols_1_adj,
