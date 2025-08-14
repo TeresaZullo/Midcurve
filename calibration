@@ -102,7 +102,7 @@ def period_to_years(p: ql.Period) -> float:
 
 def get_Q_matrix(rho_inner_short, rho_inner_long, alpha_1, alpha_2, sigma, eta, expiry):
     
-    g_short = np.array(alpha_1) * np.array(sigma_1) * np.sqrt(expiry)
+    g_short = np.array(alpha_1) * np.array(sigma) * np.sqrt(expiry)
     g_short /= np.sqrt(g_short @ g_short)
     g_short = g_short[np.newaxis].T
     
@@ -209,7 +209,7 @@ def BlackBasketApprossimativePayoffMidCurve(
     max_iter: int = 50,
 ) -> float:
 
-    alpha = np.asarray(alpha, dtype=float).reshape(-1)                # (2m,)
+    alpha = np.asarray(alpha, dtype=float).reshape(-1)              
     sigma_calibrated = np.asarray(sigma_calibrated, dtype=float).reshape(-1)
     
     midcurve_basket_dimension = len(alpha)
@@ -242,9 +242,45 @@ def BlackBasketApprossimativePayoffMidCurve(
     gamma = calculate_Gamma(beta, var_cov_matrix, expiry)
 
     cdf_values = norm.cdf(gamma - B)
-    payoff = np.dot(alpha_corrected, cdf_values)
+    payoff = np.dot(alpha_corrected, cdf_values) + norm.cdf(-B) * (f0_mc - strike - alpha_corrected.sum())
 
-    return payoff*(annuity_2-annuity_1)
+ #loop iterativo 
+    for _ in range(max_iter):
+        payoff_prev = payoff
+        w = (alpha_corrected * norm.pdf(gamma - B))             
+
+        # gamma nuovo = (cov @ w) / sqrt(w^T cov w)
+        denom = float(w.T @ cov @ w)
+        if denom <= 0.0:
+            break
+        gamma = (cov @ w) / np.sqrt(denom)                    
+
+        # B nuovo: risolvo sum_i alpha_i * exp(gamma_i * B - 0.5 gamma_i^2) + (f0 - K - sum alpha) = 0
+        g = gamma.flatten()
+        a = alpha_corrected
+
+        def _root_B(b: float) -> float:
+            return float(np.sum(a * np.exp(g * b - 0.5 * g * g))) + (f0_mc - strike - float(a.sum()))
+
+        # uso secant con due guess vicini attorno al B corrente
+        x0 = B
+        x1 = B + 1e-4 if B == 0.0 else B * (1.0 + 1e-4)
+        try:
+            sol = opt.root_scalar(_root_B, x0=x0, x1=x1, method="secant")
+            if sol.converged:
+                B = float(sol.root)
+        except Exception:
+            # se il solve fallisce, esco con i valori correnti
+            break
+
+        payoff = float((alpha_corrected * norm.cdf(gamma - B)).sum()) \
+                 + float(norm.cdf(-B)) * (f0_mc - strike - a.sum())
+
+        # check convergenza
+        if abs(payoff - payoff_prev) < tol:
+            break
+        
+    return payoff * (annuity_2 - annuity_1)
 
 def objective_function_swaption_1(params, market_swaption_1: CalibrationData):
     alpha_1 = params[:2]  
