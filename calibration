@@ -208,7 +208,7 @@ def BlackBasketApprossimativePayoffMidCurve(
     Q_long: np.ndarray,
     tol: float = 1e-10,
     max_iter: int = 50,
-) -> tuple[list[float], list[float]]:
+) -> float:
 
     alpha = np.asarray(alpha, dtype=float).reshape(-1)              
     sigma_calibrated = np.asarray(sigma_calibrated, dtype=float).reshape(-1)
@@ -242,7 +242,7 @@ def BlackBasketApprossimativePayoffMidCurve(
     B = (float(strike) - float(f0_mc)) + 0.5 * float(np.sum(alpha_corrected * np.diag(var_cov_matrix)))
     B /= stdev
 
-    beta = alpha / stdev
+    beta = alpha_corrected / stdev
     gamma = var_cov_matrix @ beta.reshape(-1, 1)
     cdf_values = norm.cdf(gamma - B)
 
@@ -253,14 +253,14 @@ def BlackBasketApprossimativePayoffMidCurve(
         payoff0 = payoff
     
         w = alpha_row.T * spss.norm.pdf(gamma - B)
-        gamma = (var_cov_matrix @ w) / np.sqrt(w.T @ cov @ w)
+        gamma = (var_cov_matrix @ w) / np.sqrt(w.T @ var_cov_matrix @ w)
 
         opt_B = lambda b: alpha @ np.exp(gamma * b - 0.5 * gamma * gamma) + (f0_mc - strike - alpha_corrected.sum())
         B = spopt.root_scalar(opt_B, x0=B.flatten()).root
         payoff = (alpha_row.T * spss.norm.cdf(gamma - B)).sum(axis=0) + (f0_mc - strike - alpha_corrected.sum()) * spss.norm.cdf(-B)
     
     payoff = (alpha_row.T * spss.norm.cdf(gamma - B)).sum(axis=0) + spss.norm.cdf(-B) * (f0_mc - strike - alpha_corrected.sum())
-    payoff = payoff * (long_annuity - short_annuity)
+    payoff = payoff * (annuity_2 - annuity_1)
     return payoff
 
 def objective_function_swaption_1(params, market_swaption_1: CalibrationData):
@@ -368,7 +368,7 @@ def objective_function_swaption_sigma_1(params, market_swaption_1: CalibrationDa
     sigma = params[:2]  
     errors = []
     for i, strike in enumerate(strike_adj):  
-        var_cov = np.diag(sigma) @ np.diag(sigma)
+        var_cov_matrix = np.diag(sigma) @ np.diag(sigma)
         model_price = BlackBasketApprossimativePayoff_Adj(f0_fixed_list[i], strike, alpha_fixed_list[i], sigma, var_cov_matrix, market_swaption_1.expiry).item()
         error = (model_price - market_swaption_1.market_prices[i]) / (market_swaption_1.vegas[i] * market_swaption_1.black_vols[1])
         errors.append(error ** 2)
@@ -379,9 +379,9 @@ def objective_function_swaption_sigma_2(params, market_swaption_2: CalibrationDa
     eta = params[:2]
     errors = []
     for i, strike in enumerate(strike_adj):
-        var_cov = np.diag(eta) @ np.diag(eta)  
+        var_cov_matrix = np.diag(eta) @ np.diag(eta)  
         model_price = BlackBasketApprossimativePayoff_Adj(f0_fixed_list[i], strike, alpha_fixed_list[i], eta, var_cov_matrix, market_swaption_2.expiry).item()
-        error = (model_price - market_swaption_2.market_prices[i]) / (market_swaption_2.black_vegas[i] * market_swaption_2.black_vols[1])
+        error = (model_price - market_swaption_2.market_prices[i]) / (market_swaption_2.vegas[i] * market_swaption_2.black_vols[1])
         errors.append(error ** 2)
 
     return np.sqrt(np.sum(errors))
@@ -412,10 +412,10 @@ def calibrate_black_basket_swaption_sigma_2(market_swaption_2: CalibrationData, 
     else:
         return None
     
-def objective_function_theta(theta_param, market_price,f0_mc, strike, alpha_mc, sigma_mc, expiry, annuity_1, annuity_2, Q_short, Q_long):
+def objective_function_theta(theta_param, market_price,f0_mc, strike, alpha, sigma_calibrated, expiry, annuity_1, annuity_2, Q_short, Q_long):
     theta = [theta_param[0], 0.0, 0.0, 0.0]  
     
-    model_price = BlackBasketApprossimativePayoffMidCurve(f0_mc, strike, alpha_mc, sigma_mc, theta, expiry, annuity_1, annuity_2, Q_short, Q_long)
+    model_price = BlackBasketApprossimativePayoffMidCurve(f0_mc, strike, alpha, sigma_calibrated, theta, expiry, annuity_1, annuity_2, Q_short, Q_long,tol, max_iter)
     error = (model_price - market_price)/market_price
 
     return np.sqrt(error**2)
@@ -449,7 +449,7 @@ def compute_smile(market_swaption: CalibrationData,
     T  = market_swaption.expiry
 
     for i, strike in enumerate(market_swaption.strikes):
-        p_model = BlackBasketApprossimativePayoff(f0, K, alpha, sigma, T).item()
+        p_model = BlackBasketApprossimativePayoff(f0, strike, alpha, sigma, T).item()
 
         iv_model = ql.bachelierBlackFormulaImpliedVol(ql.Option.Call, strike, f0, T, p_model, discount=1.0) * 1e4
         model_ivols.append(iv_model)
@@ -581,6 +581,8 @@ def plot_model_price_vs_theta(market_price, f0_mc ,strike, alpha_1, alpha_2, sig
             annuity_2=annuity_2,
             Q_short=Q_short,
             Q_long=Q_long,
+            tol = 1e-10,
+            max_iter = 50,
         )
 
         model_prices.append(model_price)
@@ -610,8 +612,8 @@ def main():
     calibration_data = load(index=True)
 
     # Estrai i dati delle due swaption di calibrazione
-    market_swaption_1 = get_swaption_data(calibration_data, "1y", "5y")
-    market_swaption_2 = get_swaption_data(calibration_data, "1y", "10y")
+    market_swaption_1 = get_swaption_data(calibration_data, "1Y", "5Y")
+    market_swaption_2 = get_swaption_data(calibration_data, "1Y", "10Y")
 
     market_swaption_1.forward_swap = f0_1
     market_swaption_2.forward_swap = f0_2
@@ -619,8 +621,8 @@ def main():
     #prima calibrazione
     alpha_1, sigma_1 = calibrate_black_basket_swaption_1(market_swaption_1)
     alpha_2, sigma_2 = calibrate_black_basket_swaption_2(market_swaption_2)
-    print("Calibrazione 1y10y -> alpha:", alpha_1, " sigma:", sigma_1)
-    print("Calibrazione 1y20y -> alpha:", alpha_2, " sigma:", sigma_2)
+    print("Calibrazione 1y5y -> alpha:", alpha_1, " sigma:", sigma_1)
+    print("Calibrazione 1y10y -> alpha:", alpha_2, " sigma:", sigma_2)
 
     
     model_ivols_1, market_ivols_1 = compute_smile(market_swaption_1, alpha_1, sigma_1)
@@ -651,7 +653,7 @@ def main():
     annuities = annuity_rates.calculate_annuity()
     annuity_1, annuity_2 = annuities
     
-    measure_approx= MeasureApproximation(annuities=annuities, maturities=maturities, T0=T0, rates=rates)
+    measure_approx= MeasureApproximation(annuities=annuities, maturities=maturities, expiry=T0, rates=rates)
     
     lambdas_1 = measure_approx.calculate_lambda()[0][0]  
     lambdas_2 = measure_approx.calculate_lambda()[0][1]    
@@ -660,11 +662,11 @@ def main():
     lambdas_k_2 = [1 - lambdas_2 * K for K in market_swaption_2.strikes]
     
     f0_1_adj = [market_swaption_1.forward_swap * lambda_k for lambda_k in lambdas_k_1]
-    alpha_1_adj =[[a * lambda_k for a in calibrated_params_1[0]] for lambda_k in lambdas_k_1] 
+    alpha_1_adj =[[a * lambda_k for alpha_1 in calibrated_params_1[0]] for lambda_k in lambdas_k_1] 
     strike_1_adj =[K * (1 -lambdas_1*market_swaption_1.forward_swap) for K in market_swaption_1.strikes]    
     
     f0_2_adj = [market_swaption_2.forward_swap * lambda_k for lambda_k in lambdas_k_2]
-    alpha_2_adj = [[a * lambda_k for a in calibrated_params_2[0]] for lambda_k in lambdas_k_2]
+    alpha_2_adj = [[a * lambda_k for alpha_2 in calibrated_params_2[0]] for lambda_k in lambdas_k_2]
     strike_2_adj =[K * (1 -lambdas_2* market_swaption_2.forward_swap ) for K in market_swaption_2.strikes] 
     
     sigma_calibrated_1 = calibrate_black_basket_swaption_sigma_1(market_swaption_1, alpha_1_adj, f0_1_adj, strike_1_adj)
@@ -675,73 +677,73 @@ def main():
  
 #plot seconda calibrazione
     
-alpha_1_adj_list, strike_1_adj_list = [], []
-alpha_2_adj_list, strike_2_adj_list = [], []
+    alpha_1_adj_list, strike_1_adj_list = [], []
+    alpha_2_adj_list, strike_2_adj_list = [], []
 
-for K in market_swaption_1.strikes:
-    lambda_k_1 = 1 - lambdas_1 * K  
-    alpha_1_adj_k =[alpha_1[0] * lambda_k_1, alpha_1[1] * lambda_k_1]  
-    alpha_1_adj_list.append(tuple(alpha_1_adj_k)) 
-    strike_1_adj_list.append(K * lambda_k_1) 
+    for K in market_swaption_1.strikes:
+        lambda_k_1 = 1 - lambdas_1 * K  
+        alpha_1_adj_k =[alpha_1[0] * lambda_k_1, alpha_1[1] * lambda_k_1]  
+        alpha_1_adj_list.append(tuple(alpha_1_adj_k)) 
+        strike_1_adj_list.append(K * lambda_k_1) 
 
-for K in market_swaption_2.strikes:
-    lambda_k_2 = 1 - lambdas_2 * K
-    alpha_2_adj_k =[alpha_2[0] * lambda_k_2, alpha_2[1] * lambda_k_2]
-    alpha_2_adj_list.append(tuple(alpha_2_adj_k)) 
-    strike_2_adj_list.append(K * lambda_k_2)
+    for K in market_swaption_2.strikes:
+        lambda_k_2 = 1 - lambdas_2 * K
+        alpha_2_adj_k =[alpha_2[0] * lambda_k_2, alpha_2[1] * lambda_k_2]
+        alpha_2_adj_list.append(tuple(alpha_2_adj_k)) 
+        strike_2_adj_list.append(K * lambda_k_2)
 
-var_cov_sigma1 = build_var_matrix(sigma_calibrated_1)
-var_cov_sigma2 = build_var_matrix(sigma_calibrated_2)    
+    var_cov_sigma1 = build_var_matrix(sigma_calibrated_1)
+    var_cov_sigma2 = build_var_matrix(sigma_calibrated_2)    
 
-model_prices_1_adj, model_ivols_1_adj, market_ivols_1_adj = [], [], []
-for i, (K_adj, alpha_1_k) in enumerate(zip(strike_1_adj_list, alpha_1_adj_list)): 
-    model_price = BlackBasketApprossimativePayoff_Adj(
+    model_prices_1_adj, model_ivols_1_adj, market_ivols_1_adj = [], [], []
+    for i, (K_adj, alpha_1_k) in enumerate(zip(strike_1_adj_list, alpha_1_adj_list)): 
+        model_price = BlackBasketApprossimativePayoff_Adj(
             f0_1_adj[i], K_adj,alpha_1_k, sigma_calibrated_1,
             var_cov_sigma1, market_swaption_1.expiry
-    ).item()
+        ).item()
         
-    model_prices_1_adj.append(model_price)
+        model_prices_1_adj.append(model_price)
 
-    model_ivol = ql.bachelierBlackFormulaImpliedVol(ql.Option.Call, K_adj, f0_1_adj[i], market_swaption_1.expiry, model_price, discount=1) * 1e4
-    model_ivols_1_adj.append(model_ivol)
+        model_ivol = ql.bachelierBlackFormulaImpliedVol(ql.Option.Call, K_adj, f0_1_adj[i], market_swaption_1.expiry, model_price, discount=1) * 1e4
+        model_ivols_1_adj.append(model_ivol)
 
-    mkt_ivol = ql.bachelierBlackFormulaImpliedVol(
-        ql.Option.Call, K_adj, f0_1_adj[i], market_swaption_1.expiry, market_swaption_1.market_prices[i], discount=1.0
-    ) * 1e4
-    market_ivols_1_adj.append(mkt_ivol)
+        mkt_ivol = ql.bachelierBlackFormulaImpliedVol(
+            ql.Option.Call, K_adj, f0_1_adj[i], market_swaption_1.expiry, market_swaption_1.market_prices[i], discount=1.0
+        ) * 1e4
+        market_ivols_1_adj.append(mkt_ivol)
         
-model_prices_2_adj ,model_ivols_2_adj, market_ivols_2_adj = [], [], []
-for i, (K_adj, alpha_2_k) in enumerate(zip(strike_2_adj_list, alpha_2_adj_list)):
-    model_price = BlackBasketApprossimativePayoff_Adj(
+    model_prices_2_adj ,model_ivols_2_adj, market_ivols_2_adj = [], [], []
+    for i, (K_adj, alpha_2_k) in enumerate(zip(strike_2_adj_list, alpha_2_adj_list)):
+        model_price = BlackBasketApprossimativePayoff_Adj(
             f0_2_adj[i], K_adj, alpha_2_k, sigma_calibrated_2,
             var_cov_sigma2, market_swaption_2.expiry
-    ).item()
+        ).item()
     
-    model_prices_2_adj.append(model_price)
+        model_prices_2_adj.append(model_price)
         
-    model_ivol = ql.bachelierBlackFormulaImpliedVol(ql.Option.Call, K_adj, f0_2_adj[i], market_swaption_2.expiry, model_price, discount=1) * 1e4
-    model_ivols_2_adj.append(model_ivol)
+        model_ivol = ql.bachelierBlackFormulaImpliedVol(ql.Option.Call, K_adj, f0_2_adj[i], market_swaption_2.expiry, model_price, discount=1) * 1e4
+        model_ivols_2_adj.append(model_ivol)
 
-    mkt_ivol = ql.bachelierBlackFormulaImpliedVol(
-        ql.Option.Call, K_adj, f0_2_adj[i], market_swaption_2.expiry, market_swaption_2.market_prices[i], discount=1.0
-    ) * 1e4
-    market_ivols_2_adj.append(mkt_ivol)
+        mkt_ivol = ql.bachelierBlackFormulaImpliedVol(
+            ql.Option.Call, K_adj, f0_2_adj[i], market_swaption_2.expiry, market_swaption_2.market_prices[i], discount=1.0
+        ) * 1e4
+        market_ivols_2_adj.append(mkt_ivol)
 
-plot_ivol_smile(
-    market_swaption_1, model_ivols_1_adj, market_ivols_1_adj,
-    market_swaption_2, model_ivols_2_adj, market_ivols_2_adj
-)  
+    plot_ivol_smile(
+        market_swaption_1, model_ivols_1_adj, market_ivols_1_adj,
+        market_swaption_2, model_ivols_2_adj, market_ivols_2_adj
+    )  
     
     #pricing midcurve 
 
-alpha_mc = np.array([*alpha_1, *alpha_2])              
-sigma_mc = np.array([*sigma_calibrated_1, *sigma_calibrated_2])
-annuity_1 = annuities[0]
-annuity_2 = annuities[1]
-market_price_mc = 0.02588
-strike_mc = market_price_mc
+    alpha_mc = np.array([*alpha_1, *alpha_2])              
+    sigma_mc = np.array([*sigma_calibrated_1, *sigma_calibrated_2])
+    annuity_1 = annuities[0]
+    annuity_2 = annuities[1]
+    market_price_mc = 0.02588
+    strike_mc = market_price_mc
 
-calibrated_theta = calibrate_theta(
+    calibrated_theta = calibrate_theta(
         market_price=market_price_mc,
         f0_mc=f0_mc,
         strike=strike_mc,
@@ -752,33 +754,33 @@ calibrated_theta = calibrate_theta(
         annuity_2=annuity_2,
         Q_short=Q_short,
         Q_long=Q_long,
-)
-theta_calibrated = calibrated_theta[0]
-print(f"Theta calibrato: {theta_calibrated}")
+    )
+    theta_calibrated = calibrated_theta[0]
+    print(f"Theta calibrato: {theta_calibrated}")
     
 
-model_price_mc = BlackBasketApprossimativePayoffMidCurve(
-    f0_mc=f0_mc,
-    strike=strike_mc,
-    alpha=alpha_mc,
-    sigma_calibrated=sigma_mc,
-    theta=theta_calibrated,
-    expiry=expiry,
-    annuity_1=annuity_1,
-    annuity_2=annuity_2,
-    Q_short=Q_short,
-    Q_long=Q_long,
-    tol = 1e-10,
-    max_iter = 50,
-)
+    model_price_mc = BlackBasketApprossimativePayoffMidCurve(
+        f0_mc=f0_mc,
+        strike=strike_mc,
+        alpha=alpha_mc,
+        sigma_calibrated=sigma_mc,
+        theta=theta_calibrated,
+        expiry=expiry,
+        annuity_1=annuity_1,
+        annuity_2=annuity_2,
+        Q_short=Q_short,
+        Q_long=Q_long,
+        tol = 1e-10,
+        max_iter = 50,
+    )
     
-print("\n📊 Confronto Prezzi Mid-Curve:")
-print(f"▪️ Prezzo di mercato  : {Market_price:.6f}")
-print(f"▪️ Prezzo da modello  : {Model_price:.6f}")
-print(f"▪️ Errore assoluto    : {abs(Model_price - Market_price):.6f}")
-print(f"▪️ Errore relativo (%) : {(Model_price - Market_price) / Market_price * 100:.2f}%")
+    print("\n📊 Confronto Prezzi Mid-Curve:")
+    print(f"▪️ Prezzo di mercato  : {market_price_c:.6f}")
+    print(f"▪️ Prezzo da modello  : {model_price_mc:.6f}")
+    print(f"▪️ Errore assoluto    : {abs(model_price_mc - market_price_mc):.6f}")
+    print(f"▪️ Errore relativo (%) : {(model_price_mc - market_price_mc) / market_price_mc * 100:.2f}%")
     
-plot_model_price_vs_theta(market_price_midcurve, alpha_1, alpha_2, sigma_calibrated_1, sigma_calibrated_2, expiry, annuity_1, annuity_2)
+    plot_model_price_vs_theta(market_price_midcurve, alpha_1, alpha_2, sigma_calibrated_1, sigma_calibrated_2, expiry, annuity_1, annuity_2)
         
             
 if __name__ == "__main__":
